@@ -169,3 +169,12 @@ Thumbs.db
 # Windows
 *.tmp
 *.temp
+
+# exe pack
+/main.build/
+/main.dist/
+/main.onefile-build/
+main.exe
+
+# custom
+未命名项目.pgp

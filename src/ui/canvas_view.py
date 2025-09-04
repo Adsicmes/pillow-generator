@@ -9,9 +9,9 @@ from PySide6.QtWidgets import (
     QGraphicsTextItem, QFrame
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap, QFont, QColor, QPen, QPainter
+from PySide6.QtGui import QPixmap, QColor, QPen, QPainter, QFontDatabase
 
-from ..core.models import ProjectModel, BaseLayer, ImageLayer, TextLayer, LayerType
+from ..core.models import ProjectModel, BaseLayer, ImageLayer, TextLayer, LayerType, TextAlignment
 
 
 class LayerGraphicsItem(QGraphicsPixmapItem):
@@ -80,10 +80,18 @@ class ImageGraphicsItem(LayerGraphicsItem):
 class TextGraphicsItem(QGraphicsTextItem):
     """文字图形项"""
     
+    # 类级别字体缓存，避免重复加载相同字体
+    _font_cache: Dict[str, str] = {}  # font_path -> font_family_name
+    
     def __init__(self, layer: TextLayer, project_model: ProjectModel, parent=None):
         super().__init__(parent)
         self.text_layer = layer
         self.project_model = project_model
+        
+        # 防止无限循环的标志
+        self._updating_position = False
+        self._dragging = False  # 是否正在拖动
+        
         self.setFlag(self.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(self.GraphicsItemFlag.ItemSendsGeometryChanges, True)
@@ -91,32 +99,173 @@ class TextGraphicsItem(QGraphicsTextItem):
         
     def update_text(self):
         """更新显示的文字"""
-        self.setPlainText(self.text_layer.text)
+        # 使用HTML来实现对齐，这是最可靠的方法
+        html_text = self._create_html_text()
+        self.setHtml(html_text)
         
-        # 设置字体
-        font = QFont()
+        # 只有在不是在处理拖动位置更新时才应用对齐
+        if not self._dragging:
+            # 使用QTimer延迟应用垂直对齐，确保HTML布局完成
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(10, self._apply_vertical_alignment)
+        
+    def _apply_vertical_alignment(self):
+        """应用对齐（延迟执行以确保HTML布局完成）"""
+        # 如果正在更新位置，避免递归调用
+        if self._updating_position:
+            return
+            
+        # 设置更新标志
+        self._updating_position = True
+        
+        try:
+            # 从锚点位置计算实际显示位置
+            anchor_x = self.text_layer.position.x
+            anchor_y = self.text_layer.position.y
+            
+            # 获取文字尺寸
+            text_rect = self.boundingRect()
+            text_width = text_rect.width()
+            text_height = text_rect.height()
+            
+            # 根据水平对齐计算显示X位置
+            display_x = anchor_x
+            if self.text_layer.horizontal_align == TextAlignment.CENTER:
+                # 居中对齐：从锚点（中心）计算左边界
+                display_x = anchor_x - text_width / 2
+            elif self.text_layer.horizontal_align == TextAlignment.RIGHT:
+                # 右对齐：从锚点（右边界）计算左边界
+                display_x = anchor_x - text_width
+            # 左对齐：锚点就是左边界，无需调整
+            
+            # 根据垂直对齐计算显示Y位置
+            display_y = anchor_y
+            if self.text_layer.vertical_align == TextAlignment.MIDDLE:
+                # 居中对齐：从锚点（中心）计算顶边界
+                display_y = anchor_y - text_height / 2
+            elif self.text_layer.vertical_align == TextAlignment.BOTTOM:
+                # 底部对齐：从锚点（底边界）计算顶边界
+                display_y = anchor_y - text_height
+            # 顶部对齐：锚点就是顶边界，无需调整
+            
+            # 设置最终显示位置
+            self.setPos(display_x, display_y)
+        finally:
+            # 重置更新标志
+            self._updating_position = False
+        
+    def _create_html_text(self):
+        """创建带有样式的HTML文本"""
+        # 获取字体信息
+        font_family = "Arial"  # 默认字体
         if self.text_layer.font_path and os.path.exists(self.text_layer.font_path):
-            # TODO: 加载自定义字体
-            pass
-        font.setPointSize(self.text_layer.font_size)
-        self.setFont(font)
+            # 检查字体缓存
+            if self.text_layer.font_path in self._font_cache:
+                font_family = self._font_cache[self.text_layer.font_path]
+            else:
+                # 加载自定义字体
+                font_database = QFontDatabase()
+                font_id = font_database.addApplicationFont(self.text_layer.font_path)
+                if font_id != -1:
+                    font_families = font_database.applicationFontFamilies(font_id)
+                    if font_families:
+                        font_family = font_families[0]
+                        self._font_cache[self.text_layer.font_path] = font_family
+                else:
+                    print(f"警告: 无法加载字体文件 {self.text_layer.font_path}")
         
-        # 设置颜色
-        color = QColor(*self.text_layer.color)
-        self.setDefaultTextColor(color)
+        # 获取颜色
+        color = self.text_layer.color
+        color_str = f"rgba({color[0]}, {color[1]}, {color[2]}, {color[3]/255})"
         
-        # 设置位置
-        self.setPos(self.text_layer.position.x, self.text_layer.position.y)
+        # 获取对齐方式
+        align_map = {
+            TextAlignment.LEFT: "left",
+            TextAlignment.CENTER: "center", 
+            TextAlignment.RIGHT: "right"
+        }
+        text_align = align_map.get(self.text_layer.horizontal_align, "left")
+        
+        # 构建HTML（为对齐设置足够的宽度）
+        html = f"""
+        <div style="
+            font-family: '{font_family}';
+            font-size: {self.text_layer.font_size}px;
+            color: {color_str};
+            text-align: {text_align};
+            width: 300px;
+            white-space: nowrap;
+        ">
+            {self.text_layer.text}
+        </div>
+        """
+        
+        return html
+        
+    def mousePressEvent(self, event):
+        """鼠标按下事件"""
+        self._dragging = True
+        super().mousePressEvent(event)
+        
+    def mouseReleaseEvent(self, event):
+        """鼠标释放事件"""
+        super().mouseReleaseEvent(event)
+        # 延迟重置拖动状态，确保位置更新完成
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(100, lambda: setattr(self, '_dragging', False))
         
     def itemChange(self, change, value):
         """处理项目变化"""
         if change == self.GraphicsItemChange.ItemPositionHasChanged:
-            # 更新图层位置并通知模型
-            pos = value
-            self.text_layer.position.x = int(pos.x())
-            self.text_layer.position.y = int(pos.y())
-            # 通知模型图层已更新，这样属性面板会收到信号并更新UI
-            self.project_model.update_layer(self.text_layer)
+            # 如果正在更新位置，避免递归调用
+            if self._updating_position:
+                return super().itemChange(change, value)
+                
+            # 标记为拖动状态
+            self._dragging = True
+            
+            try:
+                # 计算锚点位置（根据对齐方式确定）
+                pos = value
+                current_x = int(pos.x())
+                current_y = int(pos.y())
+                
+                # 获取文字尺寸
+                text_rect = self.boundingRect()
+                text_width = text_rect.width()
+                text_height = text_rect.height()
+                
+                # 计算锚点位置
+                anchor_x = current_x
+                anchor_y = current_y
+                
+                # 根据水平对齐调整锚点X
+                if self.text_layer.horizontal_align == TextAlignment.CENTER:
+                    # 居中对齐：锚点为文字区域中心X
+                    anchor_x = current_x + text_width / 2
+                elif self.text_layer.horizontal_align == TextAlignment.RIGHT:
+                    # 右对齐：锚点为文字区域右边界
+                    anchor_x = current_x + text_width
+                # 左对齐：锚点就是当前位置（文字区域左边界）
+                
+                # 根据垂直对齐调整锚点Y
+                if self.text_layer.vertical_align == TextAlignment.MIDDLE:
+                    # 居中对齐：锚点为文字区域中心Y
+                    anchor_y = current_y + text_height / 2
+                elif self.text_layer.vertical_align == TextAlignment.BOTTOM:
+                    # 底部对齐：锚点为文字区域底边界
+                    anchor_y = current_y + text_height
+                # 顶部对齐：锚点就是当前位置（文字区域顶边界）
+                
+                # 更新图层的锚点位置
+                self.text_layer.position.x = int(anchor_x)
+                self.text_layer.position.y = int(anchor_y)
+                
+                # 通知模型图层已更新
+                self.project_model.update_layer(self.text_layer)
+            except Exception as e:
+                print(f"拖动处理出错: {e}")
+                self._dragging = False
             
         return super().itemChange(change, value)
 

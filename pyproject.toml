@@ -9,3 +9,9 @@ dependencies = [
     "pillow>=11.3.0",
     "pyside6>=6.9.2",
 ]
+
+[dependency-groups]
+dev = [
+    "auto-py-to-exe>=2.47.0",
+    "nuitka>=2.7.13",
+]

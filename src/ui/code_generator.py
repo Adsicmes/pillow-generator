@@ -308,8 +308,9 @@ class CodeGenerator(QWidget):
                 color_tuple = f"({text_layer.color[0]}, {text_layer.color[1]}, {text_layer.color[2]}, {text_layer.color[3]})"
                 
                 # 计算文字位置（考虑对齐方式）
-                pos_x = text_layer.position.x
-                pos_y = text_layer.position.y
+                # 注意：text_layer.position 存储的是对齐锚点位置
+                anchor_x = text_layer.position.x
+                anchor_y = text_layer.position.y
                 
                 if (text_layer.horizontal_align != TextAlignment.LEFT or 
                     text_layer.vertical_align != TextAlignment.TOP):
@@ -318,26 +319,34 @@ class CodeGenerator(QWidget):
                     lines.append(f'    text_bbox = draw.textbbox((0, 0), {text_var}, font={font_var})')
                     lines.append(f'    text_width = text_bbox[2] - text_bbox[0]')
                     lines.append(f'    text_height = text_bbox[3] - text_bbox[1]')
+                    lines.append('    ')
+                    lines.append('    # 根据对齐方式计算绘制位置')
                     
-                    # 水平对齐
+                    # 水平对齐 - 从锚点计算实际绘制位置
                     if text_layer.horizontal_align == TextAlignment.CENTER:
-                        lines.append(f'    text_x = {pos_x} - text_width // 2')
+                        lines.append('    # 居中对齐：锚点为文字中心')
+                        lines.append(f'    text_x = {anchor_x} - text_width // 2')
                     elif text_layer.horizontal_align == TextAlignment.RIGHT:
-                        lines.append(f'    text_x = {pos_x} - text_width')
+                        lines.append('    # 右对齐：锚点为文字右边界')
+                        lines.append(f'    text_x = {anchor_x} - text_width')
                     else:
-                        lines.append(f'    text_x = {pos_x}')
+                        lines.append('    # 左对齐：锚点为文字左边界')
+                        lines.append(f'    text_x = {anchor_x}')
                         
-                    # 垂直对齐
+                    # 垂直对齐 - 从锚点计算实际绘制位置
                     if text_layer.vertical_align == TextAlignment.MIDDLE:
-                        lines.append(f'    text_y = {pos_y} - text_height // 2')
+                        lines.append('    # 垂直居中：锚点为文字中心')
+                        lines.append(f'    text_y = {anchor_y} - text_height // 2')
                     elif text_layer.vertical_align == TextAlignment.BOTTOM:
-                        lines.append(f'    text_y = {pos_y} - text_height')
+                        lines.append('    # 底部对齐：锚点为文字底边界')
+                        lines.append(f'    text_y = {anchor_y} - text_height')
                     else:
-                        lines.append(f'    text_y = {pos_y}')
+                        lines.append('    # 顶部对齐：锚点为文字顶边界')
+                        lines.append(f'    text_y = {anchor_y}')
                         
                     lines.append(f'    draw.text((text_x, text_y), {text_var}, font={font_var}, fill={color_tuple})')
                 else:
-                    lines.append(f'    draw.text(({pos_x}, {pos_y}), {text_var}, font={font_var}, fill={color_tuple})')
+                    lines.append(f'    draw.text(({anchor_x}, {anchor_y}), {text_var}, font={font_var}, fill={color_tuple})')
                     
                 lines.append('')
                 
