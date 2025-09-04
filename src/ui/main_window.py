@@ -325,6 +325,10 @@ class MainWindow(QMainWindow):
         self.project_model.clear_layers()
         self.project_model._base_image = None
         self.project_model.project_name = "未命名项目"
+        self.project_model.function_name = "generate_image"
+        
+        # 更新代码生成器UI
+        self.code_generator.update_from_project()
         
         self.status_bar.showMessage("已创建新项目")
         
@@ -345,6 +349,9 @@ class MainWindow(QMainWindow):
                 # 确保项目名称与文件名一致
                 project_name = os.path.splitext(os.path.basename(file_path))[0]
                 self.project_model.project_name = project_name
+                
+                # 更新代码生成器UI
+                self.code_generator.update_from_project()
                 
                 self.setWindowTitle(f"Pillow 代码生成器 - {os.path.basename(file_path)}")
                 self.status_bar.showMessage(f"已打开项目: {os.path.basename(file_path)}")

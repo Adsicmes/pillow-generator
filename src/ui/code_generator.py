@@ -27,6 +27,7 @@ class CodeGenerator(QWidget):
         self.project_model = project_model
         
         self.init_ui()
+        self.connect_signals()
         
     def init_ui(self):
         """初始化UI"""
@@ -54,7 +55,7 @@ class CodeGenerator(QWidget):
         function_layout = QFormLayout(function_group)
         
         # 函数名
-        self.function_name_edit = QLineEdit("generate_image")
+        self.function_name_edit = QLineEdit()
         function_layout.addRow("函数名:", self.function_name_edit)
         
         # 参数列表
@@ -109,6 +110,28 @@ class CodeGenerator(QWidget):
         splitter.setStretchFactor(1, 2)
         
         # 初始刷新参数
+        self.refresh_parameters()
+        
+    def connect_signals(self):
+        """连接信号槽"""
+        # 连接函数名输入框的变化到项目模型
+        self.function_name_edit.textChanged.connect(self.on_function_name_changed)
+        
+        # 初始化函数名输入框的值
+        self.function_name_edit.setText(self.project_model.function_name)
+        
+    def on_function_name_changed(self, text: str):
+        """函数名变化处理"""
+        self.project_model.function_name = text
+        
+    def update_from_project(self):
+        """从项目模型更新UI"""
+        # 更新函数名输入框
+        self.function_name_edit.blockSignals(True)
+        self.function_name_edit.setText(self.project_model.function_name)
+        self.function_name_edit.blockSignals(False)
+        
+        # 刷新参数列表
         self.refresh_parameters()
         
     def refresh_parameters(self):
@@ -185,7 +208,7 @@ class CodeGenerator(QWidget):
         lines.append("")
         
         # 函数定义
-        function_name = self.function_name_edit.text() or "generate_image"
+        function_name = self.project_model.function_name or "generate_image"
         parameters = self.collect_parameters()
         
         param_strs = []

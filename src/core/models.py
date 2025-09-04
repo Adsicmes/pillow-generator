@@ -148,6 +148,7 @@ class ProjectModel(QObject):
         self._layers: List[BaseLayer] = []
         self._base_image: Optional[BaseImageLayer] = None
         self._project_name = "未命名项目"
+        self._function_name = "generate_image"
         
     @property
     def project_name(self) -> str:
@@ -156,6 +157,14 @@ class ProjectModel(QObject):
     @project_name.setter
     def project_name(self, name: str):
         self._project_name = name
+        
+    @property
+    def function_name(self) -> str:
+        return self._function_name
+        
+    @function_name.setter
+    def function_name(self, name: str):
+        self._function_name = name
         
     @property
     def base_image(self) -> Optional[BaseImageLayer]:
@@ -227,6 +236,7 @@ class ProjectModel(QObject):
         """导出为字典"""
         return {
             'project_name': self._project_name,
+            'function_name': self._function_name,
             'base_image': self._base_image.to_dict() if self._base_image else None,
             'layers': [layer.to_dict() for layer in self._layers]
         }

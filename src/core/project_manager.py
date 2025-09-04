@@ -26,6 +26,7 @@ class ProjectManager:
             project_data = {
                 'version': '1.0.0',
                 'project_name': project_model.project_name,
+                'function_name': project_model.function_name,
                 'base_image': None,
                 'layers': []
             }
@@ -84,6 +85,9 @@ class ProjectManager:
             
             # 设置项目名称
             project_model.project_name = project_data.get('project_name', '未命名项目')
+            
+            # 设置函数名称
+            project_model.function_name = project_data.get('function_name', 'generate_image')
             
             # 加载底图
             if project_data.get('base_image'):
