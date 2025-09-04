@@ -8,7 +8,8 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QSplitter, QMenuBar, QMenu, QToolBar, QStatusBar,
-    QFileDialog, QMessageBox, QDockWidget, QApplication
+    QFileDialog, QMessageBox, QDockWidget, QApplication,
+    QDialog, QDialogButtonBox, QFormLayout, QCheckBox, QLineEdit
 )
 from PySide6.QtCore import Qt, QSettings, Signal
 from PySide6.QtGui import QAction, QIcon, QKeySequence
@@ -19,6 +20,54 @@ from .canvas_view import CanvasView
 from .layer_panel import LayerPanel
 from .property_panel import PropertyPanel
 from .code_generator import CodeGenerator
+
+
+class BaseImageDialog(QDialog):
+    """底图设置对话框"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("底图设置")
+        self.setModal(True)
+        self.resize(400, 200)
+        
+        layout = QVBoxLayout(self)
+        
+        # 表单布局
+        form_layout = QFormLayout()
+        layout.addLayout(form_layout)
+        
+        # 作为参数选项
+        self.parameter_checkbox = QCheckBox()
+        self.parameter_checkbox.setChecked(False)
+        self.parameter_checkbox.toggled.connect(self.on_parameter_toggled)
+        form_layout.addRow("作为函数参数:", self.parameter_checkbox)
+        
+        # 参数名输入
+        self.parameter_name_edit = QLineEdit("base_image_path")
+        self.parameter_name_edit.setEnabled(False)
+        form_layout.addRow("参数名:", self.parameter_name_edit)
+        
+        # 按钮
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+    def on_parameter_toggled(self, checked: bool):
+        """参数选项切换"""
+        self.parameter_name_edit.setEnabled(checked)
+        if not checked:
+            self.parameter_name_edit.setText("base_image_path")
+            
+    def get_parameter_settings(self):
+        """获取参数设置"""
+        return {
+            'is_parameter': self.parameter_checkbox.isChecked(),
+            'parameter_name': self.parameter_name_edit.text() or "base_image_path"
+        }
 
 
 class MainWindow(QMainWindow):
@@ -334,8 +383,27 @@ class MainWindow(QMainWindow):
         )
         
         if file_path:
-            self.project_model.set_base_image(file_path, f"底图 - {os.path.basename(file_path)}")
-            self.status_bar.showMessage(f"已设置底图: {os.path.basename(file_path)}")
+            # 显示底图设置对话框
+            dialog = BaseImageDialog(self)
+            
+            # 如果已经有底图，加载现有设置
+            if self.project_model.base_image:
+                base_img = self.project_model.base_image
+                dialog.parameter_checkbox.setChecked(base_img.is_path_parameter)
+                dialog.parameter_name_edit.setText(base_img.parameter_name)
+                dialog.parameter_name_edit.setEnabled(base_img.is_path_parameter)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                settings = dialog.get_parameter_settings()
+                self.project_model.set_base_image(
+                    file_path, 
+                    f"底图 - {os.path.basename(file_path)}",
+                    settings['is_parameter'],
+                    settings['parameter_name']
+                )
+                
+                param_text = f" (参数: {settings['parameter_name']})" if settings['is_parameter'] else ""
+                self.status_bar.showMessage(f"已设置底图: {os.path.basename(file_path)}{param_text}")
             
     def add_image_layer(self):
         """添加图片层"""

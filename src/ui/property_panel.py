@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
 from ..core.models import (
-    ProjectModel, BaseLayer, ImageLayer, TextLayer, 
+    ProjectModel, BaseLayer, ImageLayer, TextLayer, BaseImageLayer,
     LayerType, TextAlignment
 )
 
@@ -144,6 +144,34 @@ class PropertyPanel(QWidget):
         self.rotation_spinbox.valueChanged.connect(self.on_rotation_changed)
         image_layout.addRow("旋转:", self.rotation_spinbox)
         
+        # 底图属性组（仅底图显示）
+        self.base_image_group = QGroupBox("底图属性")
+        layout.addWidget(self.base_image_group)
+        
+        base_image_layout = QFormLayout(self.base_image_group)
+        
+        # 底图路径
+        base_path_layout = QHBoxLayout()
+        self.base_image_path_edit = QLineEdit()
+        self.base_image_path_edit.setReadOnly(True)
+        base_path_layout.addWidget(self.base_image_path_edit)
+        
+        self.browse_base_image_btn = QPushButton("浏览")
+        self.browse_base_image_btn.clicked.connect(self.browse_base_image)
+        base_path_layout.addWidget(self.browse_base_image_btn)
+        
+        base_image_layout.addRow("底图路径:", base_path_layout)
+        
+        # 作为参数
+        self.base_image_parameter_checkbox = QCheckBox()
+        self.base_image_parameter_checkbox.toggled.connect(self.on_base_image_parameter_changed)
+        base_image_layout.addRow("作为参数:", self.base_image_parameter_checkbox)
+        
+        # 参数名称
+        self.base_image_param_name_edit = QLineEdit()
+        self.base_image_param_name_edit.textChanged.connect(self.on_base_image_param_name_changed)
+        base_image_layout.addRow("参数名:", self.base_image_param_name_edit)
+        
         # 文字属性组（仅文字层显示）
         self.text_group = QGroupBox("文字属性")
         layout.addWidget(self.text_group)
@@ -231,6 +259,7 @@ class PropertyPanel(QWidget):
         self.basic_group.hide()
         self.position_group.hide()
         self.image_group.hide()
+        self.base_image_group.hide()
         self.text_group.hide()
         
     def set_current_layer(self, layer_id: str):
@@ -270,12 +299,19 @@ class PropertyPanel(QWidget):
         if isinstance(self.current_layer, ImageLayer):
             self.show_image_properties()
             self.text_group.hide()
+            self.base_image_group.hide()
         elif isinstance(self.current_layer, TextLayer):
             self.show_text_properties()
             self.image_group.hide()
+            self.base_image_group.hide()
+        elif isinstance(self.current_layer, BaseImageLayer):
+            self.show_base_image_properties()
+            self.image_group.hide()
+            self.text_group.hide()
         else:
             self.image_group.hide()
             self.text_group.hide()
+            self.base_image_group.hide()
             
     def show_image_properties(self):
         """显示图片属性"""
@@ -328,6 +364,18 @@ class PropertyPanel(QWidget):
             TextAlignment.BOTTOM: 2
         }
         self.v_align_combo.setCurrentIndex(v_align_map.get(layer.vertical_align, 0))
+        
+    def show_base_image_properties(self):
+        """显示底图属性"""
+        self.base_image_group.show()
+        if not isinstance(self.current_layer, BaseImageLayer):
+            return
+            
+        layer = self.current_layer
+        
+        self.base_image_path_edit.setText(layer.image_path)
+        self.base_image_parameter_checkbox.setChecked(layer.is_path_parameter)
+        self.base_image_param_name_edit.setText(layer.parameter_name)
         
     # 信号处理函数
     def on_name_changed(self, text: str):
@@ -511,3 +559,36 @@ class PropertyPanel(QWidget):
             
             # 更新当前图层引用
             self.current_layer = layer
+            
+    def on_base_image_parameter_changed(self, is_parameter: bool):
+        """底图参数变化"""
+        if isinstance(self.current_layer, BaseImageLayer):
+            self.current_layer.is_path_parameter = is_parameter
+            self.update_base_image()
+            
+    def on_base_image_param_name_changed(self, name: str):
+        """底图参数名变化"""
+        if isinstance(self.current_layer, BaseImageLayer):
+            self.current_layer.parameter_name = name
+            self.update_base_image()
+            
+    def browse_base_image(self):
+        """浏览底图文件"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择底图",
+            "",
+            "图片文件 (*.png *.jpg *.jpeg *.bmp *.tiff);;所有文件 (*)"
+        )
+        if file_path and isinstance(self.current_layer, BaseImageLayer):
+            self.current_layer.image_path = file_path
+            self.base_image_path_edit.setText(file_path)
+            self.update_base_image()
+            
+    def update_base_image(self):
+        """更新底图"""
+        if isinstance(self.current_layer, BaseImageLayer):
+            # 更新项目模型中的底图
+            self.project_model._base_image = self.current_layer
+            # 触发底图更新信号
+            self.project_model.base_image_changed.emit(self.current_layer.image_path)

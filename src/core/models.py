@@ -64,12 +64,16 @@ class BaseLayer:
 class BaseImageLayer(BaseLayer):
     """基础图片层（底图）"""
     image_path: str = ""
+    is_path_parameter: bool = False  # 是否作为参数传入
+    parameter_name: str = "base_image_path"  # 参数名
     layer_type: LayerType = LayerType.BASE
     
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
         data.update({
-            'image_path': self.image_path
+            'image_path': self.image_path,
+            'is_path_parameter': self.is_path_parameter,
+            'parameter_name': self.parameter_name
         })
         return data
 
@@ -157,11 +161,13 @@ class ProjectModel(QObject):
     def base_image(self) -> Optional[BaseImageLayer]:
         return self._base_image
         
-    def set_base_image(self, image_path: str, name: str = "底图"):
+    def set_base_image(self, image_path: str, name: str = "底图", is_parameter: bool = False, parameter_name: str = "base_image_path"):
         """设置底图"""
         self._base_image = BaseImageLayer(
             name=name,
-            image_path=image_path
+            image_path=image_path,
+            is_path_parameter=is_parameter,
+            parameter_name=parameter_name
         )
         self.base_image_changed.emit(image_path)
         

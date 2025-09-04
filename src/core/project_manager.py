@@ -40,6 +40,8 @@ class ProjectManager:
                     'id': project_model.base_image.id,
                     'name': project_model.base_image.name,
                     'image_path': relative_path,
+                    'is_path_parameter': project_model.base_image.is_path_parameter,
+                    'parameter_name': project_model.base_image.parameter_name,
                     'layer_type': project_model.base_image.layer_type.value
                 }
             
@@ -89,7 +91,15 @@ class ProjectManager:
                 base_path = os.path.dirname(file_path)
                 absolute_path = self.get_absolute_path(base_data['image_path'], base_path)
                 
-                project_model.set_base_image(absolute_path, base_data['name'])
+                is_parameter = base_data.get('is_path_parameter', False)
+                parameter_name = base_data.get('parameter_name', 'base_image_path')
+                
+                project_model.set_base_image(
+                    absolute_path, 
+                    base_data['name'], 
+                    is_parameter, 
+                    parameter_name
+                )
                 
             # 加载图层
             for layer_data in project_data.get('layers', []):

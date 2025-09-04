@@ -6,14 +6,14 @@ from typing import List, Dict, Any
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QPushButton, QHBoxLayout,
-    QLabel, QGroupBox, QCheckBox, QLineEdit, QFormLayout, QFileDialog,
+    QLabel, QGroupBox, QLineEdit, QFormLayout, QFileDialog,
     QMessageBox, QSplitter, QListWidget, QListWidgetItem
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 from ..core.models import (
-    ProjectModel, BaseLayer, ImageLayer, TextLayer, 
+    ProjectModel, ImageLayer, TextLayer, 
     LayerType, TextAlignment
 )
 
@@ -56,10 +56,6 @@ class CodeGenerator(QWidget):
         # 函数名
         self.function_name_edit = QLineEdit("generate_image")
         function_layout.addRow("函数名:", self.function_name_edit)
-        
-        # 输出路径参数名
-        self.output_param_edit = QLineEdit("output_path")
-        function_layout.addRow("输出路径参数:", self.output_param_edit)
         
         # 参数列表
         param_group = QGroupBox("参数列表")
@@ -134,39 +130,39 @@ class CodeGenerator(QWidget):
         """收集所有参数"""
         parameters = []
         
-        # 添加输出路径参数
-        output_param = self.output_param_edit.text() or "output_path"
-        parameters.append({
-            'name': output_param,
-            'type': 'str',
-            'description': '输出图片路径'
-        })
+        # 收集底图参数
+        base_image = self.project_model.base_image
+        if base_image and base_image.is_path_parameter:
+            parameters.append({
+                'name': base_image.parameter_name,
+                'type': 'str',
+                'description': f'底图路径 - {base_image.name}'
+            })
         
         # 收集图片层参数
         for layer in self.project_model.get_layers_by_type(LayerType.IMAGE):
-            image_layer = layer
-            if image_layer.is_path_parameter:
+            if isinstance(layer, ImageLayer) and layer.is_path_parameter:
                 parameters.append({
-                    'name': image_layer.parameter_name,
+                    'name': layer.parameter_name,
                     'type': 'str',
                     'description': f'图片路径 - {layer.name}'
                 })
                 
         # 收集文字层参数
         for layer in self.project_model.get_layers_by_type(LayerType.TEXT):
-            text_layer = layer
-            if text_layer.is_text_parameter:
-                parameters.append({
-                    'name': text_layer.text_parameter_name,
-                    'type': 'str',
-                    'description': f'文字内容 - {layer.name}'
-                })
-            if text_layer.is_font_parameter:
-                parameters.append({
-                    'name': text_layer.font_parameter_name,
-                    'type': 'str',
-                    'description': f'字体路径 - {layer.name}'
-                })
+            if isinstance(layer, TextLayer):
+                if layer.is_text_parameter:
+                    parameters.append({
+                        'name': layer.text_parameter_name,
+                        'type': 'str',
+                        'description': f'文字内容 - {layer.name}'
+                    })
+                if layer.is_font_parameter:
+                    parameters.append({
+                        'name': layer.font_parameter_name,
+                        'type': 'str',
+                        'description': f'字体路径 - {layer.name}'
+                    })
                 
         return parameters
         
@@ -203,18 +199,26 @@ class CodeGenerator(QWidget):
         lines.append('    """')
         lines.append(f'    生成图像 - {self.project_model.project_name}')
         lines.append('    ')
-        lines.append('    参数:')
-        for param in parameters:
-            lines.append(f'        {param["name"]}: {param["description"]}')
+        if parameters:
+            lines.append('    参数:')
+            for param in parameters:
+                lines.append(f'        {param["name"]}: {param["description"]}')
+            lines.append('    ')
+        lines.append('    返回:')
+        lines.append('        PIL.Image.Image: 生成的图像对象')
         lines.append('    """')
         
         # 加载底图
         base_image = self.project_model.base_image
         if base_image and base_image.image_path:
-            # 使用相对路径
-            rel_path = os.path.relpath(base_image.image_path)
-            lines.append(f'    # 加载底图')
-            lines.append(f'    base_image = Image.open(r"{rel_path}")')
+            lines.append('    # 加载底图')
+            if base_image.is_path_parameter:
+                # 作为参数传入
+                lines.append(f'    base_image = Image.open({base_image.parameter_name})')
+            else:
+                # 使用固定路径
+                rel_path = os.path.relpath(base_image.image_path)
+                lines.append(f'    base_image = Image.open(r"{rel_path}")')
             lines.append('    result = base_image.copy()')
             lines.append('')
         else:
@@ -228,6 +232,8 @@ class CodeGenerator(QWidget):
             lines.append('    # 添加图片层')
             
             for i, layer in enumerate(image_layers):
+                if not isinstance(layer, ImageLayer):
+                    continue
                 image_layer = layer
                 if not image_layer.visible:
                     lines.append(f'    # 图片层 "{layer.name}" 已隐藏')
@@ -276,6 +282,8 @@ class CodeGenerator(QWidget):
             lines.append('')
             
             for i, layer in enumerate(text_layers):
+                if not isinstance(layer, TextLayer):
+                    continue
                 text_layer = layer
                 if not text_layer.visible:
                     lines.append(f'    # 文字层 "{layer.name}" 已隐藏')
@@ -350,11 +358,9 @@ class CodeGenerator(QWidget):
                     
                 lines.append('')
                 
-        # 保存结果
-        output_param = self.output_param_edit.text() or "output_path"
-        lines.append('    # 保存结果')
-        lines.append(f'    result.save({output_param})')
-        lines.append(f'    print(f"图像已保存到: {{{output_param}}}")')
+        # 返回结果
+        lines.append('    # 返回生成的图像')
+        lines.append('    return result')
         lines.append('')
         
         # 添加示例调用
@@ -364,24 +370,28 @@ class CodeGenerator(QWidget):
         
         example_params = []
         for param in parameters:
-            if param['name'] == output_param:
-                example_params.append(f'"{param["name"]}": "output.png"')
-            elif param['type'] == 'str' and 'path' in param['name'].lower():
+            if param['type'] == 'str' and 'path' in param['name'].lower():
                 example_params.append(f'"{param["name"]}": "path/to/file"')
             else:
                 example_params.append(f'"{param["name"]}": "example_value"')
                 
-        # 生成示例参数字典
-        if len(example_params) > 1:  # 有除了输出路径之外的参数
+        # 生成示例调用
+        if example_params:
+            lines.append('    # 生成图像')
             lines.append('    params = {')
             for param_str in example_params:
                 key, value = param_str.split(': ')
                 lines.append(f'        {key}: {value},')
             lines.append('    }')
-            lines.append(f'    {function_name}(**params)')
+            lines.append(f'    image = {function_name}(**params)')
         else:
-            # 只有输出路径参数
-            lines.append(f'    {function_name}("output.png")')
+            lines.append('    # 生成图像')
+            lines.append(f'    image = {function_name}()')
+            
+        lines.append('    ')
+        lines.append('    # 保存图像（可选）')
+        lines.append('    image.save("output.png")')
+        lines.append('    print("图像已生成并保存到 output.png")')
             
         return '\n'.join(lines)
         
@@ -395,7 +405,9 @@ class CodeGenerator(QWidget):
         parent = self.parent()
         while parent:
             if hasattr(parent, 'status_bar'):
-                parent.status_bar.showMessage("代码已复制到剪贴板", 3000)
+                status_bar = getattr(parent, 'status_bar', None)
+                if status_bar and hasattr(status_bar, 'showMessage'):
+                    status_bar.showMessage("代码已复制到剪贴板", 3000)
                 break
             parent = parent.parent()
             
@@ -419,7 +431,9 @@ class CodeGenerator(QWidget):
                 parent = self.parent()
                 while parent:
                     if hasattr(parent, 'status_bar'):
-                        parent.status_bar.showMessage(f"代码已保存到: {os.path.basename(file_path)}", 3000)
+                        status_bar = getattr(parent, 'status_bar', None)
+                        if status_bar and hasattr(status_bar, 'showMessage'):
+                            status_bar.showMessage(f"代码已保存到: {os.path.basename(file_path)}", 3000)
                         break
                     parent = parent.parent()
                     
