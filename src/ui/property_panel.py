@@ -321,6 +321,12 @@ class PropertyPanel(QWidget):
             
         layer = self.current_layer
         
+        # 暂时阻塞信号以避免在更新UI时触发不必要的回调
+        self.width_spinbox.blockSignals(True)
+        self.height_spinbox.blockSignals(True)
+        self.opacity_slider.blockSignals(True)
+        self.rotation_spinbox.blockSignals(True)
+        
         self.image_path_edit.setText(layer.image_path)
         self.image_parameter_checkbox.setChecked(layer.is_path_parameter)
         self.image_param_name_edit.setText(layer.parameter_name)
@@ -330,6 +336,12 @@ class PropertyPanel(QWidget):
         self.opacity_label.setText(f"{int(layer.opacity * 100)}%")
         self.rotation_spinbox.setValue(layer.rotation)
         
+        # 恢复信号连接
+        self.width_spinbox.blockSignals(False)
+        self.height_spinbox.blockSignals(False)
+        self.opacity_slider.blockSignals(False)
+        self.rotation_spinbox.blockSignals(False)
+        
     def show_text_properties(self):
         """显示文字属性"""
         self.text_group.show()
@@ -337,6 +349,11 @@ class PropertyPanel(QWidget):
             return
             
         layer = self.current_layer
+        
+        # 暂时阻塞信号以避免在更新UI时触发不必要的回调
+        self.font_size_spinbox.blockSignals(True)
+        self.h_align_combo.blockSignals(True)
+        self.v_align_combo.blockSignals(True)
         
         self.text_edit.setText(layer.text)
         self.text_parameter_checkbox.setChecked(layer.is_text_parameter)
@@ -364,6 +381,11 @@ class PropertyPanel(QWidget):
             TextAlignment.BOTTOM: 2
         }
         self.v_align_combo.setCurrentIndex(v_align_map.get(layer.vertical_align, 0))
+        
+        # 恢复信号连接
+        self.font_size_spinbox.blockSignals(False)
+        self.h_align_combo.blockSignals(False)
+        self.v_align_combo.blockSignals(False)
         
     def show_base_image_properties(self):
         """显示底图属性"""
@@ -556,6 +578,20 @@ class PropertyPanel(QWidget):
             # 恢复信号连接
             self.x_spinbox.blockSignals(False)
             self.y_spinbox.blockSignals(False)
+            
+            # 如果是图片层，还需要更新尺寸显示
+            if isinstance(layer, ImageLayer):
+                # 防止循环更新：先断开信号连接
+                self.width_spinbox.blockSignals(True)
+                self.height_spinbox.blockSignals(True)
+                
+                # 更新尺寸显示
+                self.width_spinbox.setValue(layer.size.width)
+                self.height_spinbox.setValue(layer.size.height)
+                
+                # 恢复信号连接
+                self.width_spinbox.blockSignals(False)
+                self.height_spinbox.blockSignals(False)
             
             # 更新当前图层引用
             self.current_layer = layer
