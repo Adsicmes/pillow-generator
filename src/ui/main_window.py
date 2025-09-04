@@ -342,6 +342,10 @@ class MainWindow(QMainWindow):
         
         if file_path:
             if self.project_manager.load_project(self.project_model, file_path):
+                # 确保项目名称与文件名一致
+                project_name = os.path.splitext(os.path.basename(file_path))[0]
+                self.project_model.project_name = project_name
+                
                 self.setWindowTitle(f"Pillow 代码生成器 - {os.path.basename(file_path)}")
                 self.status_bar.showMessage(f"已打开项目: {os.path.basename(file_path)}")
             else:
@@ -367,6 +371,10 @@ class MainWindow(QMainWindow):
         )
         
         if file_path:
+            # 更新项目名称为文件名（去掉扩展名）
+            project_name = os.path.splitext(os.path.basename(file_path))[0]
+            self.project_model.project_name = project_name
+            
             if self.project_manager.save_project(self.project_model, file_path):
                 self.setWindowTitle(f"Pillow 代码生成器 - {os.path.basename(file_path)}")
                 self.status_bar.showMessage(f"项目已保存至: {os.path.basename(file_path)}")
