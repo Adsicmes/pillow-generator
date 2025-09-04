@@ -1,8 +1,12 @@
 # Pillow 代码生成器
 
-一个可视化的Pillow模板编排工具，帮助您快速创建和生成PIL/Pillow代码。
+一个可视化的Pillow模板编排工具，帮助您快速创建和生成Pillow代码。
 
-！本README完全使用ai生成，项目代码大幅度使用了ai，请注意甄别！
+clone或下载项目后，如果你已经安装了uv
+那么可以直接cd到项目根目录运行 uv run main.py 运行
+且可以直接使用pack2exe.bat进行打包
+
+！本README该行以下内容完全使用ai生成，项目代码大幅度使用了ai，请注意甄别！
 
 ## 功能特性
 

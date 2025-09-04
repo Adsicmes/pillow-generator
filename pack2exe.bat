@@ -1,0 +1,1 @@
+uv run nuitka --standalone --onefile --enable-plugin=pyside6 main.py
