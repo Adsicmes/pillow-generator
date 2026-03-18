@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -95,6 +96,13 @@ class PreviewDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
+        hint_label = QLabel(
+            "此窗口显示最终 Pillow 渲染结果；编辑画布用于布局调整，显示可能略有近似。",
+            self,
+        )
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+
         scroll_area = QScrollArea(self)
         scroll_area.setWidgetResizable(True)
         preview_label = QLabel(self)
@@ -151,6 +159,7 @@ class MainWindow(QMainWindow):
         self.code_dock = QDockWidget("代码生成器", self)
         self.code_generator = CodeGenerator(self.project_model, self)
         self.canvas_view = CanvasView(self.project_model, self)
+        self.recent_projects_menu = QMenu("最近项目", self)
 
         # 设置窗口属性
         self.setWindowTitle("Pillow 代码生成器")
@@ -204,6 +213,9 @@ class MainWindow(QMainWindow):
         open_action.setStatusTip("打开现有的项目文件")
         open_action.triggered.connect(self.open_project)
         file_menu.addAction(open_action)
+
+        self.recent_projects_menu = file_menu.addMenu("最近项目")
+        self.update_recent_projects_menu()
 
         file_menu.addSeparator()
 
@@ -337,7 +349,9 @@ class MainWindow(QMainWindow):
 
     def create_status_bar(self):
         """创建状态栏"""
-        self.status_bar.showMessage("准备就绪")
+        self.status_bar.showMessage(
+            "准备就绪：滚轮缩放，空格+左键拖动画布，预览显示最终 Pillow 渲染结果"
+        )
 
     def create_dock_widgets(self):
         """创建停靠窗口"""
@@ -365,6 +379,7 @@ class MainWindow(QMainWindow):
         # 连接画布和图层面板的选择信号
         self.canvas_view.layer_selected.connect(self.property_panel.set_current_layer)
         self.layer_panel.layer_selected.connect(self.canvas_view.select_layer)
+        self.canvas_view.layer_selected.connect(self.layer_panel.select_layer)
 
         # 连接代码生成器的参数刷新信号
         self.project_model.layer_added.connect(self.code_generator.refresh_parameters)
@@ -381,6 +396,40 @@ class MainWindow(QMainWindow):
         else:
             title_suffix = self.project_model.project_name
         self.setWindowTitle(f"Pillow 代码生成器 - {title_suffix}")
+
+    def get_recent_projects(self) -> list[str]:
+        recent_projects = self.settings.value("recentProjects", [])
+        if isinstance(recent_projects, str):
+            return [recent_projects]
+        if isinstance(recent_projects, list):
+            return [path for path in recent_projects if isinstance(path, str)]
+        return []
+
+    def update_recent_projects_menu(self):
+        self.recent_projects_menu.clear()
+        recent_projects = self.get_recent_projects()
+        if not recent_projects:
+            empty_action = QAction("暂无最近项目", self)
+            empty_action.setEnabled(False)
+            self.recent_projects_menu.addAction(empty_action)
+            return
+
+        for file_path in recent_projects:
+            action = QAction(os.path.basename(file_path), self)
+            action.setStatusTip(file_path)
+            action.triggered.connect(
+                lambda checked=False, path=file_path: self.open_project(path)
+            )
+            self.recent_projects_menu.addAction(action)
+
+    def add_recent_project(self, file_path: str):
+        normalized_path = os.path.abspath(file_path)
+        recent_projects = [
+            path for path in self.get_recent_projects() if path != normalized_path
+        ]
+        recent_projects.insert(0, normalized_path)
+        self.settings.setValue("recentProjects", recent_projects[:5])
+        self.update_recent_projects_menu()
 
     # 槽函数实现
     def new_project(self):
@@ -402,14 +451,27 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage("已创建新项目")
 
-    def open_project(self):
+    def open_project(self, target_file_path: str | None = None):
         """打开项目"""
         if self.check_unsaved_changes():
             return
 
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "打开项目", "", "Pillow Generator项目 (*.pgp);;所有文件 (*)"
-        )
+        file_path = target_file_path
+        if not file_path:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "打开项目", "", "Pillow Generator项目 (*.pgp);;所有文件 (*)"
+            )
+
+        if file_path and not os.path.exists(file_path):
+            QMessageBox.warning(
+                self, "文件不存在", f"最近项目文件不存在：\n{file_path}"
+            )
+            self.settings.setValue(
+                "recentProjects",
+                [path for path in self.get_recent_projects() if path != file_path],
+            )
+            self.update_recent_projects_menu()
+            return
 
         if file_path:
             if self.project_manager.load_project(self.project_model, file_path):
@@ -421,6 +483,7 @@ class MainWindow(QMainWindow):
                 # 更新代码生成器UI
                 self.code_generator.update_from_project()
                 self.update_window_title()
+                self.add_recent_project(file_path)
                 self.status_bar.showMessage(
                     f"已打开项目: {os.path.basename(file_path)}"
                 )
@@ -434,6 +497,8 @@ class MainWindow(QMainWindow):
                 self.project_model, self.project_manager.current_file
             ):
                 self.update_window_title()
+                if self.project_manager.current_file:
+                    self.add_recent_project(self.project_manager.current_file)
                 self.status_bar.showMessage("项目已保存")
                 return True
 
@@ -459,6 +524,7 @@ class MainWindow(QMainWindow):
 
         if self.project_manager.save_project(self.project_model, file_path):
             self.update_window_title()
+            self.add_recent_project(file_path)
             self.status_bar.showMessage(f"项目已保存至: {os.path.basename(file_path)}")
             return True
 
