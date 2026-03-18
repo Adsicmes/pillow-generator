@@ -55,6 +55,12 @@ class ProjectManager:
                 project_data["base_image"] = {
                     "id": project_model.base_image.id,
                     "name": project_model.base_image.name,
+                    "visible": project_model.base_image.visible,
+                    "locked": project_model.base_image.locked,
+                    "position": {
+                        "x": project_model.base_image.position.x,
+                        "y": project_model.base_image.position.y,
+                    },
                     "image_path": relative_path,
                     "is_path_parameter": project_model.base_image.is_path_parameter,
                     "parameter_name": project_model.base_image.parameter_name,
@@ -118,6 +124,13 @@ class ProjectManager:
                 project_model.set_base_image(
                     absolute_path, base_data["name"], is_parameter, parameter_name
                 )
+                if project_model.base_image:
+                    project_model.base_image.visible = base_data.get("visible", True)
+                    project_model.base_image.locked = base_data.get("locked", False)
+                    position = base_data.get("position", {})
+                    project_model.base_image.position = Position(
+                        position.get("x", 0), position.get("y", 0)
+                    )
 
             for layer_data in project_data.get("layers", []):
                 layer = self.create_layer_from_data(layer_data, file_path)
@@ -144,6 +157,7 @@ class ProjectManager:
                 id=layer_data["id"],
                 name=layer_data["name"],
                 visible=layer_data["visible"],
+                locked=layer_data.get("locked", False),
                 position=Position(
                     layer_data["position"]["x"], layer_data["position"]["y"]
                 ),
@@ -174,6 +188,7 @@ class ProjectManager:
                 id=layer_data["id"],
                 name=layer_data["name"],
                 visible=layer_data["visible"],
+                locked=layer_data.get("locked", False),
                 position=Position(
                     layer_data["position"]["x"], layer_data["position"]["y"]
                 ),

@@ -3,12 +3,15 @@
 """
 
 import copy
+from copy import deepcopy
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QColor, QFont
 import uuid
+
+from .history import HistoryManager, SnapshotCommand
 
 
 class LayerType(Enum):
@@ -59,6 +62,7 @@ class BaseLayer:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = ""
     visible: bool = True
+    locked: bool = False
     layer_type: LayerType = LayerType.BASE
     position: Position = field(default_factory=Position)
 
@@ -68,6 +72,7 @@ class BaseLayer:
             "id": self.id,
             "name": self.name,
             "visible": self.visible,
+            "locked": self.locked,
             "layer_type": self.layer_type.value,
             "position": {"x": self.position.x, "y": self.position.y},
         }
@@ -208,6 +213,9 @@ class ProjectModel(QObject):
     layer_updated = Signal(BaseLayer)
     base_image_changed = Signal(str)  # image_path
     layer_order_changed = Signal()
+    model_reset = Signal()
+    history_changed = Signal(bool, bool)
+    pending_history_commit_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -215,6 +223,91 @@ class ProjectModel(QObject):
         self._base_image: Optional[BaseImageLayer] = None
         self._project_name = "未命名项目"
         self._function_name = "generate_image"
+        self._history_manager = HistoryManager()
+
+    def _emit_history_state(self):
+        self.history_changed.emit(
+            self._history_manager.can_undo,
+            self._history_manager.can_redo,
+        )
+
+    def capture_snapshot(self) -> Dict[str, Any]:
+        return deepcopy(self.to_dict())
+
+    def _restore_snapshot(self, snapshot: Dict[str, Any]):
+        self._project_name = snapshot.get("project_name", "未命名项目")
+        self._function_name = snapshot.get("function_name", "generate_image")
+        base_image_data = snapshot.get("base_image")
+        self._base_image = self._create_base_image_from_dict(base_image_data)
+        self._layers = []
+        for layer_data in snapshot.get("layers", []):
+            layer = self._create_layer_from_dict(layer_data)
+            if layer is not None:
+                self._layers.append(layer)
+
+        self.model_reset.emit()
+        self.base_image_changed.emit(
+            self._base_image.image_path if self._base_image else ""
+        )
+        self.layer_order_changed.emit()
+        for layer in self._layers:
+            self.layer_updated.emit(layer)
+
+    def record_manual_change(
+        self, before_snapshot: Dict[str, Any], description: str
+    ) -> bool:
+        after_snapshot = self.capture_snapshot()
+        if after_snapshot == before_snapshot:
+            return False
+
+        self._history_manager.push(
+            SnapshotCommand(
+                description=description,
+                before=before_snapshot,
+                after=after_snapshot,
+            )
+        )
+        self._emit_history_state()
+        return True
+
+    def apply_operation(self, description: str, operation) -> bool:
+        before_snapshot = self.capture_snapshot()
+        operation()
+        return self.record_manual_change(before_snapshot, description)
+
+    def undo(self) -> bool:
+        self.pending_history_commit_requested.emit()
+        command = self._history_manager.pop_undo()
+        if command is None:
+            return False
+
+        self._history_manager.push_redo(command)
+        self._restore_snapshot(command.before)
+        self._emit_history_state()
+        return True
+
+    def redo(self) -> bool:
+        self.pending_history_commit_requested.emit()
+        command = self._history_manager.pop_redo()
+        if command is None:
+            return False
+
+        self._history_manager.push(command)
+        self._restore_snapshot(command.after)
+        self._emit_history_state()
+        return True
+
+    def reset_history(self):
+        self._history_manager.clear()
+        self._emit_history_state()
+
+    @property
+    def can_undo(self) -> bool:
+        return self._history_manager.can_undo
+
+    @property
+    def can_redo(self) -> bool:
+        return self._history_manager.can_redo
 
     @property
     def project_name(self) -> str:
@@ -259,6 +352,13 @@ class ProjectModel(QObject):
     def clear_base_image(self):
         self.replace_base_image(None)
 
+    def replace_layer(self, layer: BaseLayer):
+        for i, current_layer in enumerate(self._layers):
+            if current_layer.id == layer.id:
+                self._layers[i] = layer
+                self.layer_updated.emit(layer)
+                return
+
     def add_layer(self, layer: BaseLayer):
         """添加图层"""
         self._layers.append(layer)
@@ -293,11 +393,7 @@ class ProjectModel(QObject):
 
     def update_layer(self, layer: BaseLayer):
         """更新图层"""
-        for i, l in enumerate(self._layers):
-            if l.id == layer.id:
-                self._layers[i] = layer
-                self.layer_updated.emit(layer)
-                break
+        self.replace_layer(layer)
 
     def get_layers_by_type(self, layer_type: LayerType) -> List[BaseLayer]:
         """按类型获取图层"""
@@ -336,3 +432,88 @@ class ProjectModel(QObject):
             "base_image": self._base_image.to_dict() if self._base_image else None,
             "layers": [layer.to_dict() for layer in self._layers],
         }
+
+    def _create_base_image_from_dict(
+        self, base_image_data: Dict[str, Any] | None
+    ) -> Optional[BaseImageLayer]:
+        if not base_image_data:
+            return None
+
+        return BaseImageLayer(
+            id=base_image_data.get("id", str(uuid.uuid4())),
+            name=base_image_data.get("name", "底图"),
+            visible=base_image_data.get("visible", True),
+            locked=base_image_data.get("locked", False),
+            position=Position(
+                base_image_data.get("position", {}).get("x", 0),
+                base_image_data.get("position", {}).get("y", 0),
+            ),
+            image_path=base_image_data.get("image_path", ""),
+            is_path_parameter=base_image_data.get("is_path_parameter", False),
+            parameter_name=base_image_data.get("parameter_name", "base_image_path"),
+        )
+
+    def _create_layer_from_dict(
+        self, layer_data: Dict[str, Any]
+    ) -> Optional[BaseLayer]:
+        layer_type = LayerType(layer_data["layer_type"])
+        layer_id = str(layer_data.get("id", str(uuid.uuid4())))
+        layer_name = str(layer_data.get("name", ""))
+        layer_visible = bool(layer_data.get("visible", True))
+        layer_locked = bool(layer_data.get("locked", False))
+        layer_position = Position(
+            int(layer_data.get("position", {}).get("x", 0)),
+            int(layer_data.get("position", {}).get("y", 0)),
+        )
+
+        if layer_type == LayerType.IMAGE:
+            layer = ImageLayer(
+                id=layer_id,
+                name=layer_name,
+                visible=layer_visible,
+                locked=layer_locked,
+                position=layer_position,
+            )
+            layer.image_path = layer_data.get("image_path", "")
+            layer.size = Size(
+                layer_data.get("size", {}).get("width", 100),
+                layer_data.get("size", {}).get("height", 100),
+            )
+            layer.rotation = layer_data.get("rotation", 0.0)
+            layer.opacity = layer_data.get("opacity", 1.0)
+            layer.is_path_parameter = layer_data.get("is_path_parameter", False)
+            layer.parameter_name = layer_data.get("parameter_name", "image_path")
+            return layer
+
+        if layer_type == LayerType.TEXT:
+            layer = TextLayer(
+                id=layer_id,
+                name=layer_name,
+                visible=layer_visible,
+                locked=layer_locked,
+                position=layer_position,
+            )
+            layer.text = layer_data.get("text", "示例文字")
+            layer.font_path = layer_data.get("font_path", "")
+            layer.font_size = layer_data.get("font_size", 24)
+            layer.color = tuple(layer_data.get("color", [0, 0, 0, 255]))
+            layer.horizontal_align = TextAlignment(
+                layer_data.get("horizontal_align", TextAlignment.LEFT.value)
+            )
+            layer.vertical_align = TextAlignment(
+                layer_data.get("vertical_align", TextAlignment.TOP.value)
+            )
+            layer.is_text_parameter = layer_data.get("is_text_parameter", False)
+            layer.text_parameter_name = layer_data.get("text_parameter_name", "text")
+            layer.is_font_parameter = layer_data.get("is_font_parameter", False)
+            layer.font_parameter_name = layer_data.get(
+                "font_parameter_name", "font_path"
+            )
+            layer.max_width = layer_data.get("max_width")
+            layer.overflow_mode = TextOverflowMode(
+                layer_data.get("overflow_mode", TextOverflowMode.TRUNCATE.value)
+            )
+            layer.truncate_suffix = layer_data.get("truncate_suffix", "...")
+            return layer
+
+        return None
