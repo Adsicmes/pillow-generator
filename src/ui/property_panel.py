@@ -2,37 +2,37 @@
 属性面板实现
 """
 
-from typing import Optional
+import copy
+from typing import Callable
 
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
-    QSpinBox,
-    QDoubleSpinBox,
-    QCheckBox,
-    QComboBox,
     QPushButton,
-    QColorDialog,
-    QFileDialog,
-    QGroupBox,
     QSlider,
-    QHBoxLayout,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 
 from ..core.models import (
-    ProjectModel,
+    BaseImageLayer,
     BaseLayer,
     ImageLayer,
-    TextLayer,
-    BaseImageLayer,
     LayerType,
+    ProjectModel,
     TextAlignment,
-    TextOverflowMode,
+    TextLayer,
 )
 
 
@@ -43,283 +43,395 @@ class PropertyPanel(QWidget):
         super().__init__(parent)
 
         self.project_model = project_model
-        self.current_layer: Optional[BaseLayer] = None
+        self.current_layer: BaseLayer | None = None
+        self._editor_widgets: list[QWidget] = []
+        self._pending_history: dict[str, tuple[dict[str, object], str, QTimer]] = {}
 
         self.init_ui()
         self.connect_signals()
 
     def connect_signals(self):
-        """连接信号槽"""
-        # 监听图层更新信号，用于实时更新属性显示
         self.project_model.layer_updated.connect(self.on_layer_updated)
+        self.project_model.model_reset.connect(self.on_model_reset)
+        self.project_model.base_image_changed.connect(self.on_base_image_changed)
+        self.project_model.pending_history_commit_requested.connect(
+            self.commit_all_history_groups
+        )
 
     def init_ui(self):
-        """初始化UI"""
         layout = QVBoxLayout(self)
 
-        # 标题
         title_label = QLabel("属性")
         title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title_label)
 
-        # 基本属性组
         self.basic_group = QGroupBox("基本属性")
         layout.addWidget(self.basic_group)
-
         basic_layout = QFormLayout(self.basic_group)
 
-        # 图层名称
         self.name_edit = QLineEdit()
         self.name_edit.textChanged.connect(self.on_name_changed)
+        self.name_edit.editingFinished.connect(
+            lambda: self.commit_history_group("layer_name")
+        )
         basic_layout.addRow("名称:", self.name_edit)
 
-        # 可见性
         self.visible_checkbox = QCheckBox()
         self.visible_checkbox.toggled.connect(self.on_visibility_changed)
         basic_layout.addRow("可见:", self.visible_checkbox)
 
-        # 位置属性组
+        self.locked_checkbox = QCheckBox()
+        self.locked_checkbox.toggled.connect(self.on_locked_changed)
+        basic_layout.addRow("锁定:", self.locked_checkbox)
+
         self.position_group = QGroupBox("位置")
         layout.addWidget(self.position_group)
-
         position_layout = QFormLayout(self.position_group)
 
-        # X坐标
         self.x_spinbox = QSpinBox()
         self.x_spinbox.setRange(-9999, 9999)
         self.x_spinbox.valueChanged.connect(self.on_position_changed)
+        self.x_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("layer_position")
+        )
         position_layout.addRow("X:", self.x_spinbox)
 
-        # Y坐标
         self.y_spinbox = QSpinBox()
         self.y_spinbox.setRange(-9999, 9999)
         self.y_spinbox.valueChanged.connect(self.on_position_changed)
+        self.y_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("layer_position")
+        )
         position_layout.addRow("Y:", self.y_spinbox)
 
-        # 图片属性组（仅图片层显示）
         self.image_group = QGroupBox("图片属性")
         layout.addWidget(self.image_group)
-
         image_layout = QFormLayout(self.image_group)
 
-        # 图片路径
         image_path_layout = QHBoxLayout()
         self.image_path_edit = QLineEdit()
         self.image_path_edit.textChanged.connect(self.on_image_path_changed)
+        self.image_path_edit.editingFinished.connect(
+            lambda: self.commit_history_group("image_path")
+        )
         image_path_layout.addWidget(self.image_path_edit)
-
         self.browse_image_btn = QPushButton("浏览")
         self.browse_image_btn.clicked.connect(self.browse_image)
         image_path_layout.addWidget(self.browse_image_btn)
-
         image_layout.addRow("图片路径:", image_path_layout)
 
-        # 作为参数
         self.image_parameter_checkbox = QCheckBox()
         self.image_parameter_checkbox.toggled.connect(self.on_image_parameter_changed)
         image_layout.addRow("作为参数:", self.image_parameter_checkbox)
 
-        # 参数名称
         self.image_param_name_edit = QLineEdit()
         self.image_param_name_edit.textChanged.connect(self.on_image_param_name_changed)
+        self.image_param_name_edit.editingFinished.connect(
+            lambda: self.commit_history_group("image_param_name")
+        )
         image_layout.addRow("参数名:", self.image_param_name_edit)
 
-        # 图片尺寸
         size_layout = QHBoxLayout()
-
         self.width_spinbox = QSpinBox()
         self.width_spinbox.setRange(1, 9999)
-        self.width_spinbox.setValue(100)
         self.width_spinbox.valueChanged.connect(self.on_size_changed)
+        self.width_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("image_size")
+        )
         size_layout.addWidget(QLabel("宽:"))
         size_layout.addWidget(self.width_spinbox)
-
         self.height_spinbox = QSpinBox()
         self.height_spinbox.setRange(1, 9999)
-        self.height_spinbox.setValue(100)
         self.height_spinbox.valueChanged.connect(self.on_size_changed)
+        self.height_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("image_size")
+        )
         size_layout.addWidget(QLabel("高:"))
         size_layout.addWidget(self.height_spinbox)
-
         image_layout.addRow("尺寸:", size_layout)
 
-        # 透明度
         opacity_layout = QHBoxLayout()
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(100)
+        self.opacity_slider.sliderPressed.connect(
+            lambda: self.begin_history_group("image_opacity", "修改图片透明度")
+        )
         self.opacity_slider.valueChanged.connect(self.on_opacity_changed)
+        self.opacity_slider.sliderReleased.connect(
+            lambda: self.commit_history_group("image_opacity")
+        )
         opacity_layout.addWidget(self.opacity_slider)
-
         self.opacity_label = QLabel("100%")
         opacity_layout.addWidget(self.opacity_label)
-
         image_layout.addRow("透明度:", opacity_layout)
 
-        # 旋转
         self.rotation_spinbox = QDoubleSpinBox()
         self.rotation_spinbox.setRange(-360, 360)
         self.rotation_spinbox.setSuffix("°")
         self.rotation_spinbox.valueChanged.connect(self.on_rotation_changed)
+        self.rotation_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("image_rotation")
+        )
         image_layout.addRow("旋转:", self.rotation_spinbox)
 
-        # 底图属性组（仅底图显示）
         self.base_image_group = QGroupBox("底图属性")
         layout.addWidget(self.base_image_group)
-
         base_image_layout = QFormLayout(self.base_image_group)
 
-        # 底图路径
         base_path_layout = QHBoxLayout()
         self.base_image_path_edit = QLineEdit()
-        self.base_image_path_edit.setReadOnly(True)
+        self.base_image_path_edit.textChanged.connect(self.on_base_image_path_changed)
+        self.base_image_path_edit.editingFinished.connect(
+            lambda: self.commit_history_group("base_image_path")
+        )
         base_path_layout.addWidget(self.base_image_path_edit)
-
         self.browse_base_image_btn = QPushButton("浏览")
         self.browse_base_image_btn.clicked.connect(self.browse_base_image)
         base_path_layout.addWidget(self.browse_base_image_btn)
-
         base_image_layout.addRow("底图路径:", base_path_layout)
 
-        # 作为参数
         self.base_image_parameter_checkbox = QCheckBox()
         self.base_image_parameter_checkbox.toggled.connect(
             self.on_base_image_parameter_changed
         )
         base_image_layout.addRow("作为参数:", self.base_image_parameter_checkbox)
 
-        # 参数名称
         self.base_image_param_name_edit = QLineEdit()
         self.base_image_param_name_edit.textChanged.connect(
             self.on_base_image_param_name_changed
         )
+        self.base_image_param_name_edit.editingFinished.connect(
+            lambda: self.commit_history_group("base_image_param_name")
+        )
         base_image_layout.addRow("参数名:", self.base_image_param_name_edit)
 
-        # 文字属性组（仅文字层显示）
         self.text_group = QGroupBox("文字属性")
         layout.addWidget(self.text_group)
-
         text_layout = QFormLayout(self.text_group)
 
-        # 文字内容
         self.text_edit = QLineEdit()
         self.text_edit.textChanged.connect(self.on_text_changed)
+        self.text_edit.editingFinished.connect(
+            lambda: self.commit_history_group("text_content")
+        )
         text_layout.addRow("文字:", self.text_edit)
 
-        # 文字作为参数
         self.text_parameter_checkbox = QCheckBox()
         self.text_parameter_checkbox.toggled.connect(self.on_text_parameter_changed)
         text_layout.addRow("文字作为参数:", self.text_parameter_checkbox)
 
-        # 文字参数名
         self.text_param_name_edit = QLineEdit()
         self.text_param_name_edit.textChanged.connect(self.on_text_param_name_changed)
+        self.text_param_name_edit.editingFinished.connect(
+            lambda: self.commit_history_group("text_param_name")
+        )
         text_layout.addRow("文字参数名:", self.text_param_name_edit)
 
-        # 字体路径
         font_path_layout = QHBoxLayout()
         self.font_path_edit = QLineEdit()
         self.font_path_edit.textChanged.connect(self.on_font_path_changed)
+        self.font_path_edit.editingFinished.connect(
+            lambda: self.commit_history_group("font_path")
+        )
         font_path_layout.addWidget(self.font_path_edit)
-
         self.browse_font_btn = QPushButton("浏览")
         self.browse_font_btn.clicked.connect(self.browse_font)
         font_path_layout.addWidget(self.browse_font_btn)
-
         text_layout.addRow("字体文件:", font_path_layout)
 
-        # 字体作为参数
         self.font_parameter_checkbox = QCheckBox()
         self.font_parameter_checkbox.toggled.connect(self.on_font_parameter_changed)
         text_layout.addRow("字体作为参数:", self.font_parameter_checkbox)
 
-        # 字体参数名
         self.font_param_name_edit = QLineEdit()
         self.font_param_name_edit.textChanged.connect(self.on_font_param_name_changed)
+        self.font_param_name_edit.editingFinished.connect(
+            lambda: self.commit_history_group("font_param_name")
+        )
         text_layout.addRow("字体参数名:", self.font_param_name_edit)
 
-        # 字体大小
         self.font_size_spinbox = QSpinBox()
         self.font_size_spinbox.setRange(8, 200)
-        self.font_size_spinbox.setValue(24)
         self.font_size_spinbox.valueChanged.connect(self.on_font_size_changed)
+        self.font_size_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("font_size")
+        )
         text_layout.addRow("字体大小:", self.font_size_spinbox)
 
-        # 文字颜色
         color_layout = QHBoxLayout()
         self.color_btn = QPushButton()
         self.color_btn.setFixedSize(50, 25)
         self.color_btn.clicked.connect(self.choose_color)
         color_layout.addWidget(self.color_btn)
-
-        self.color_label = QLabel("黑色")
+        self.color_label = QLabel("#000000")
         color_layout.addWidget(self.color_label)
-
-        # 在控件创建后设置初始颜色
-        self.update_color_button(QColor(0, 0, 0))
-
         text_layout.addRow("颜色:", color_layout)
 
-        # 水平对齐
         self.h_align_combo = QComboBox()
         self.h_align_combo.addItems(["左对齐", "居中", "右对齐"])
         self.h_align_combo.currentTextChanged.connect(self.on_h_align_changed)
         text_layout.addRow("水平对齐:", self.h_align_combo)
 
-        # 垂直对齐
         self.v_align_combo = QComboBox()
         self.v_align_combo.addItems(["顶部", "居中", "底部"])
         self.v_align_combo.currentTextChanged.connect(self.on_v_align_changed)
         text_layout.addRow("垂直对齐:", self.v_align_combo)
 
-        # 文字单元宽度限制
-        text_layout.addRow(QLabel(""))  # 分隔线
+        text_layout.addRow(QLabel(""))
 
-        # 最大宽度
         max_width_layout = QHBoxLayout()
         self.max_width_checkbox = QCheckBox("启用宽度限制")
         self.max_width_checkbox.toggled.connect(self.on_max_width_enabled_changed)
         max_width_layout.addWidget(self.max_width_checkbox)
-
         self.max_width_spinbox = QSpinBox()
         self.max_width_spinbox.setRange(50, 9999)
-        self.max_width_spinbox.setValue(300)
         self.max_width_spinbox.setSuffix("px")
         self.max_width_spinbox.valueChanged.connect(self.on_max_width_changed)
-        self.max_width_spinbox.setEnabled(False)
+        self.max_width_spinbox.editingFinished.connect(
+            lambda: self.commit_history_group("max_width")
+        )
         max_width_layout.addWidget(self.max_width_spinbox)
-
         text_layout.addRow("宽度限制:", max_width_layout)
 
-        # 截断后缀（仅截断模式显示）
         self.truncate_suffix_edit = QLineEdit()
-        self.truncate_suffix_edit.setText("...")
         self.truncate_suffix_edit.textChanged.connect(self.on_truncate_suffix_changed)
-        self.truncate_suffix_edit.setEnabled(False)
+        self.truncate_suffix_edit.editingFinished.connect(
+            lambda: self.commit_history_group("truncate_suffix")
+        )
         text_layout.addRow("截断后缀:", self.truncate_suffix_edit)
 
+        self.update_color_button(QColor(0, 0, 0))
         layout.addStretch()
 
-        # 初始状态：隐藏所有属性组
+        self._editor_widgets = [
+            self.name_edit,
+            self.visible_checkbox,
+            self.x_spinbox,
+            self.y_spinbox,
+            self.image_path_edit,
+            self.browse_image_btn,
+            self.image_parameter_checkbox,
+            self.image_param_name_edit,
+            self.width_spinbox,
+            self.height_spinbox,
+            self.opacity_slider,
+            self.rotation_spinbox,
+            self.base_image_path_edit,
+            self.base_image_parameter_checkbox,
+            self.base_image_param_name_edit,
+            self.browse_base_image_btn,
+            self.text_edit,
+            self.text_parameter_checkbox,
+            self.text_param_name_edit,
+            self.font_path_edit,
+            self.browse_font_btn,
+            self.font_parameter_checkbox,
+            self.font_param_name_edit,
+            self.font_size_spinbox,
+            self.color_btn,
+            self.h_align_combo,
+            self.v_align_combo,
+            self.max_width_checkbox,
+            self.max_width_spinbox,
+            self.truncate_suffix_edit,
+        ]
         self.hide_all_groups()
 
     def hide_all_groups(self):
-        """隐藏所有属性组"""
         self.basic_group.hide()
         self.position_group.hide()
         self.image_group.hide()
         self.base_image_group.hide()
         self.text_group.hide()
 
+    def _set_editor_signals_blocked(self, blocked: bool):
+        for widget in self._editor_widgets:
+            widget.blockSignals(blocked)
+        self.locked_checkbox.blockSignals(blocked)
+
+    def _set_editable_state(self, editable: bool):
+        for widget in self._editor_widgets:
+            widget.setEnabled(editable)
+
+        if self.current_layer and self.current_layer.layer_type == LayerType.BASE:
+            self.visible_checkbox.setEnabled(False)
+        else:
+            self.visible_checkbox.setEnabled(editable)
+
+        has_max_width = (
+            isinstance(self.current_layer, TextLayer)
+            and self.current_layer.max_width is not None
+        )
+        self.max_width_spinbox.setEnabled(editable and has_max_width)
+        self.truncate_suffix_edit.setEnabled(editable and has_max_width)
+        self.locked_checkbox.setEnabled(True)
+
+    def begin_history_group(self, key: str, description: str):
+        if key in self._pending_history or not self.current_layer:
+            return
+
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda key=key: self.commit_history_group(key))
+        before_snapshot = self.project_model.capture_snapshot()
+        self._pending_history[key] = (before_snapshot, description, timer)
+
+    def schedule_history_group_commit(self, key: str, delay_ms: int = 350):
+        pending = self._pending_history.get(key)
+        if not pending:
+            return
+        pending[2].start(delay_ms)
+
+    def commit_history_group(self, key: str):
+        pending = self._pending_history.pop(key, None)
+        if not pending:
+            return
+        before_snapshot, description, timer = pending
+        timer.stop()
+        self.project_model.record_manual_change(before_snapshot, description)
+
+    def commit_all_history_groups(self):
+        for key in list(self._pending_history.keys()):
+            self.commit_history_group(key)
+
+    def _replace_updated_layer(self, updated_layer: BaseLayer):
+        if isinstance(updated_layer, BaseImageLayer):
+            self.project_model.replace_base_image(updated_layer)
+        else:
+            self.project_model.replace_layer(updated_layer)
+
+    def _apply_current_layer_change(
+        self,
+        description: str,
+        mutator: Callable[[BaseLayer], None],
+        merge_key: str | None = None,
+        auto_commit_delay_ms: int | None = 350,
+    ):
+        if not self.current_layer:
+            return
+        if self.current_layer.locked and description != "切换图层锁定":
+            return
+
+        before_snapshot: dict[str, object] | None = None
+        if merge_key is None:
+            before_snapshot = self.project_model.capture_snapshot()
+        else:
+            self.begin_history_group(merge_key, description)
+
+        updated_layer = copy.deepcopy(self.current_layer)
+        mutator(updated_layer)
+        self._replace_updated_layer(updated_layer)
+
+        if before_snapshot is not None:
+            self.project_model.record_manual_change(before_snapshot, description)
+        elif merge_key and auto_commit_delay_ms is not None:
+            self.schedule_history_group_commit(merge_key, auto_commit_delay_ms)
+
     def set_current_layer(self, layer_id: str):
-        """设置当前图层"""
+        self.commit_all_history_groups()
         layer = self.project_model.get_layer(layer_id)
-        if not layer:
-            # 检查是否是底图
-            if (
-                self.project_model.base_image
-                and self.project_model.base_image.id == layer_id
-            ):
+        if not layer and self.project_model.base_image:
+            if self.project_model.base_image.id == layer_id:
                 layer = self.project_model.base_image
 
         if layer:
@@ -330,16 +442,15 @@ class PropertyPanel(QWidget):
             self.hide_all_groups()
 
     def update_ui(self):
-        """更新UI显示"""
         if not self.current_layer:
             return
 
-        # 显示基本属性
+        self._set_editor_signals_blocked(True)
         self.basic_group.show()
         self.name_edit.setText(self.current_layer.name)
         self.visible_checkbox.setChecked(self.current_layer.visible)
+        self.locked_checkbox.setChecked(self.current_layer.locked)
 
-        # 显示位置属性（底图除外）
         if self.current_layer.layer_type != LayerType.BASE:
             self.position_group.show()
             self.x_spinbox.setValue(self.current_layer.position.x)
@@ -347,286 +458,238 @@ class PropertyPanel(QWidget):
         else:
             self.position_group.hide()
 
-        # 根据图层类型显示相应属性
+        self.image_group.hide()
+        self.base_image_group.hide()
+        self.text_group.hide()
+
         if isinstance(self.current_layer, ImageLayer):
-            self.show_image_properties()
-            self.text_group.hide()
-            self.base_image_group.hide()
+            layer = self.current_layer
+            self.image_group.show()
+            self.image_path_edit.setText(layer.image_path)
+            self.image_parameter_checkbox.setChecked(layer.is_path_parameter)
+            self.image_param_name_edit.setText(layer.parameter_name)
+            self.width_spinbox.setValue(layer.size.width)
+            self.height_spinbox.setValue(layer.size.height)
+            self.opacity_slider.setValue(int(layer.opacity * 100))
+            self.opacity_label.setText(f"{int(layer.opacity * 100)}%")
+            self.rotation_spinbox.setValue(layer.rotation)
         elif isinstance(self.current_layer, TextLayer):
-            self.show_text_properties()
-            self.image_group.hide()
-            self.base_image_group.hide()
-        elif isinstance(self.current_layer, BaseImageLayer):
-            self.show_base_image_properties()
-            self.image_group.hide()
-            self.text_group.hide()
-        else:
-            self.image_group.hide()
-            self.text_group.hide()
-            self.base_image_group.hide()
-
-    def show_image_properties(self):
-        """显示图片属性"""
-        self.image_group.show()
-        if not isinstance(self.current_layer, ImageLayer):
-            return
-
-        layer = self.current_layer
-
-        # 暂时阻塞信号以避免在更新UI时触发不必要的回调
-        self.width_spinbox.blockSignals(True)
-        self.height_spinbox.blockSignals(True)
-        self.opacity_slider.blockSignals(True)
-        self.rotation_spinbox.blockSignals(True)
-
-        self.image_path_edit.setText(layer.image_path)
-        self.image_parameter_checkbox.setChecked(layer.is_path_parameter)
-        self.image_param_name_edit.setText(layer.parameter_name)
-        self.width_spinbox.setValue(layer.size.width)
-        self.height_spinbox.setValue(layer.size.height)
-        self.opacity_slider.setValue(int(layer.opacity * 100))
-        self.opacity_label.setText(f"{int(layer.opacity * 100)}%")
-        self.rotation_spinbox.setValue(layer.rotation)
-
-        # 恢复信号连接
-        self.width_spinbox.blockSignals(False)
-        self.height_spinbox.blockSignals(False)
-        self.opacity_slider.blockSignals(False)
-        self.rotation_spinbox.blockSignals(False)
-
-    def show_text_properties(self):
-        """显示文字属性"""
-        self.text_group.show()
-        if not isinstance(self.current_layer, TextLayer):
-            return
-
-        layer = self.current_layer
-
-        # 暂时阻塞信号以避免在更新UI时触发不必要的回调
-        self.font_size_spinbox.blockSignals(True)
-        self.h_align_combo.blockSignals(True)
-        self.v_align_combo.blockSignals(True)
-
-        self.text_edit.setText(layer.text)
-        self.text_parameter_checkbox.setChecked(layer.is_text_parameter)
-        self.text_param_name_edit.setText(layer.text_parameter_name)
-        self.font_path_edit.setText(layer.font_path)
-        self.font_parameter_checkbox.setChecked(layer.is_font_parameter)
-        self.font_param_name_edit.setText(layer.font_parameter_name)
-        self.font_size_spinbox.setValue(layer.font_size)
-
-        # 设置颜色
-        color = QColor(*layer.color)
-        self.update_color_button(color)
-
-        # 设置对齐
-        h_align_map = {
-            TextAlignment.LEFT: 0,
-            TextAlignment.CENTER: 1,
-            TextAlignment.RIGHT: 2,
-        }
-        self.h_align_combo.setCurrentIndex(h_align_map.get(layer.horizontal_align, 0))
-
-        v_align_map = {
-            TextAlignment.TOP: 0,
-            TextAlignment.MIDDLE: 1,
-            TextAlignment.BOTTOM: 2,
-        }
-        self.v_align_combo.setCurrentIndex(v_align_map.get(layer.vertical_align, 0))
-
-        # 设置文字单元宽度限制属性
-        self.max_width_checkbox.blockSignals(True)
-        self.max_width_spinbox.blockSignals(True)
-        self.truncate_suffix_edit.blockSignals(True)
-
-        # 设置宽度限制
-        has_max_width = layer.max_width is not None
-        self.max_width_checkbox.setChecked(has_max_width)
-        self.max_width_spinbox.setEnabled(has_max_width)
-        self.truncate_suffix_edit.setEnabled(has_max_width)
-
-        if has_max_width:
+            layer = self.current_layer
+            self.text_group.show()
+            self.text_edit.setText(layer.text)
+            self.text_parameter_checkbox.setChecked(layer.is_text_parameter)
+            self.text_param_name_edit.setText(layer.text_parameter_name)
+            self.font_path_edit.setText(layer.font_path)
+            self.font_parameter_checkbox.setChecked(layer.is_font_parameter)
+            self.font_param_name_edit.setText(layer.font_parameter_name)
+            self.font_size_spinbox.setValue(layer.font_size)
+            self.update_color_button(QColor(*layer.color))
+            self.h_align_combo.setCurrentIndex(
+                {
+                    TextAlignment.LEFT: 0,
+                    TextAlignment.CENTER: 1,
+                    TextAlignment.RIGHT: 2,
+                }.get(layer.horizontal_align, 0)
+            )
+            self.v_align_combo.setCurrentIndex(
+                {
+                    TextAlignment.TOP: 0,
+                    TextAlignment.MIDDLE: 1,
+                    TextAlignment.BOTTOM: 2,
+                }.get(layer.vertical_align, 0)
+            )
+            has_max_width = layer.max_width is not None
+            self.max_width_checkbox.setChecked(has_max_width)
             if layer.max_width is not None:
                 self.max_width_spinbox.setValue(layer.max_width)
+            self.truncate_suffix_edit.setText(layer.truncate_suffix)
+        elif isinstance(self.current_layer, BaseImageLayer):
+            layer = self.current_layer
+            self.base_image_group.show()
+            self.base_image_path_edit.setText(layer.image_path)
+            self.base_image_parameter_checkbox.setChecked(layer.is_path_parameter)
+            self.base_image_param_name_edit.setText(layer.parameter_name)
 
-        # 设置截断后缀
-        self.truncate_suffix_edit.setText(layer.truncate_suffix)
+        self._set_editable_state(not self.current_layer.locked)
+        self._set_editor_signals_blocked(False)
 
-        # 恢复信号连接
-        self.font_size_spinbox.blockSignals(False)
-        self.h_align_combo.blockSignals(False)
-        self.v_align_combo.blockSignals(False)
-        self.max_width_checkbox.blockSignals(False)
-        self.max_width_spinbox.blockSignals(False)
-        self.truncate_suffix_edit.blockSignals(False)
-
-    def show_base_image_properties(self):
-        """显示底图属性"""
-        self.base_image_group.show()
-        if not isinstance(self.current_layer, BaseImageLayer):
-            return
-
-        layer = self.current_layer
-
-        self.base_image_path_edit.setText(layer.image_path)
-        self.base_image_parameter_checkbox.setChecked(layer.is_path_parameter)
-        self.base_image_param_name_edit.setText(layer.parameter_name)
-
-    # 信号处理函数
     def on_name_changed(self, text: str):
-        """名称变化"""
-        if self.current_layer:
-            self.current_layer.name = text
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改图层名称",
+            lambda layer: setattr(layer, "name", text),
+            merge_key="layer_name",
+        )
 
     def on_visibility_changed(self, visible: bool):
-        """可见性变化"""
-        if self.current_layer:
-            self.current_layer.visible = visible
-            self.update_layer()
+        self._apply_current_layer_change(
+            "切换图层可见性", lambda layer: setattr(layer, "visible", visible)
+        )
+
+    def on_locked_changed(self, locked: bool):
+        self._apply_current_layer_change(
+            "切换图层锁定", lambda layer: setattr(layer, "locked", locked)
+        )
 
     def on_position_changed(self):
-        """位置变化"""
-        if self.current_layer:
-            self.current_layer.position.x = self.x_spinbox.value()
-            self.current_layer.position.y = self.y_spinbox.value()
-            self.update_layer()
+        x_value = self.x_spinbox.value()
+        y_value = self.y_spinbox.value()
+
+        def mutate_position(layer: BaseLayer):
+            layer.position.x = x_value
+            layer.position.y = y_value
+
+        self._apply_current_layer_change(
+            "修改图层位置", mutate_position, merge_key="layer_position"
+        )
 
     def on_image_path_changed(self, path: str):
-        """图片路径变化"""
-        if isinstance(self.current_layer, ImageLayer):
-            self.current_layer.image_path = path
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改图片路径",
+            lambda layer: setattr(layer, "image_path", path),
+            merge_key="image_path",
+        )
 
     def on_image_parameter_changed(self, is_parameter: bool):
-        """图片参数变化"""
-        if isinstance(self.current_layer, ImageLayer):
-            self.current_layer.is_path_parameter = is_parameter
-            self.update_layer()
+        self._apply_current_layer_change(
+            "切换图片参数",
+            lambda layer: setattr(layer, "is_path_parameter", is_parameter),
+        )
 
     def on_image_param_name_changed(self, name: str):
-        """图片参数名变化"""
-        if isinstance(self.current_layer, ImageLayer):
-            self.current_layer.parameter_name = name
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改图片参数名",
+            lambda layer: setattr(layer, "parameter_name", name),
+            merge_key="image_param_name",
+        )
 
     def on_size_changed(self):
-        """尺寸变化"""
-        if isinstance(self.current_layer, ImageLayer):
-            self.current_layer.size.width = self.width_spinbox.value()
-            self.current_layer.size.height = self.height_spinbox.value()
-            self.update_layer()
+        width = self.width_spinbox.value()
+        height = self.height_spinbox.value()
+
+        def mutate_size(layer: BaseLayer):
+            if isinstance(layer, ImageLayer):
+                layer.size.width = width
+                layer.size.height = height
+
+        self._apply_current_layer_change(
+            "修改图片尺寸", mutate_size, merge_key="image_size"
+        )
 
     def on_opacity_changed(self, value: int):
-        """透明度变化"""
-        if isinstance(self.current_layer, ImageLayer):
-            self.current_layer.opacity = value / 100.0
-            self.opacity_label.setText(f"{value}%")
-            self.update_layer()
+        self.opacity_label.setText(f"{value}%")
+        self._apply_current_layer_change(
+            "修改图片透明度",
+            lambda layer: setattr(layer, "opacity", value / 100.0),
+            merge_key="image_opacity",
+            auto_commit_delay_ms=None if self.opacity_slider.isSliderDown() else 350,
+        )
 
     def on_rotation_changed(self, value: float):
-        """旋转变化"""
-        if isinstance(self.current_layer, ImageLayer):
-            self.current_layer.rotation = value
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改图片旋转",
+            lambda layer: setattr(layer, "rotation", value),
+            merge_key="image_rotation",
+        )
 
     def on_text_changed(self, text: str):
-        """文字变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.text = text
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改文字内容",
+            lambda layer: setattr(layer, "text", text),
+            merge_key="text_content",
+        )
 
     def on_text_parameter_changed(self, is_parameter: bool):
-        """文字参数变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.is_text_parameter = is_parameter
-            self.update_layer()
+        self._apply_current_layer_change(
+            "切换文字参数",
+            lambda layer: setattr(layer, "is_text_parameter", is_parameter),
+        )
 
     def on_text_param_name_changed(self, name: str):
-        """文字参数名变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.text_parameter_name = name
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改文字参数名",
+            lambda layer: setattr(layer, "text_parameter_name", name),
+            merge_key="text_param_name",
+        )
 
     def on_font_path_changed(self, path: str):
-        """字体路径变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.font_path = path
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改字体路径",
+            lambda layer: setattr(layer, "font_path", path),
+            merge_key="font_path",
+        )
 
     def on_font_parameter_changed(self, is_parameter: bool):
-        """字体参数变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.is_font_parameter = is_parameter
-            self.update_layer()
+        self._apply_current_layer_change(
+            "切换字体参数",
+            lambda layer: setattr(layer, "is_font_parameter", is_parameter),
+        )
 
     def on_font_param_name_changed(self, name: str):
-        """字体参数名变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.font_parameter_name = name
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改字体参数名",
+            lambda layer: setattr(layer, "font_parameter_name", name),
+            merge_key="font_param_name",
+        )
 
     def on_font_size_changed(self, size: int):
-        """字体大小变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.font_size = size
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改字体大小",
+            lambda layer: setattr(layer, "font_size", size),
+            merge_key="font_size",
+        )
 
     def on_h_align_changed(self, text: str):
-        """水平对齐变化"""
-        if isinstance(self.current_layer, TextLayer):
-            align_map = {
-                "左对齐": TextAlignment.LEFT,
-                "居中": TextAlignment.CENTER,
-                "右对齐": TextAlignment.RIGHT,
-            }
-            self.current_layer.horizontal_align = align_map.get(
-                text, TextAlignment.LEFT
-            )
-            self.update_layer()
+        align_map = {
+            "左对齐": TextAlignment.LEFT,
+            "居中": TextAlignment.CENTER,
+            "右对齐": TextAlignment.RIGHT,
+        }
+        self._apply_current_layer_change(
+            "修改水平对齐",
+            lambda layer: setattr(
+                layer, "horizontal_align", align_map.get(text, TextAlignment.LEFT)
+            ),
+        )
 
     def on_v_align_changed(self, text: str):
-        """垂直对齐变化"""
-        if isinstance(self.current_layer, TextLayer):
-            align_map = {
-                "顶部": TextAlignment.TOP,
-                "居中": TextAlignment.MIDDLE,
-                "底部": TextAlignment.BOTTOM,
-            }
-            self.current_layer.vertical_align = align_map.get(text, TextAlignment.TOP)
-            self.update_layer()
+        align_map = {
+            "顶部": TextAlignment.TOP,
+            "居中": TextAlignment.MIDDLE,
+            "底部": TextAlignment.BOTTOM,
+        }
+        self._apply_current_layer_change(
+            "修改垂直对齐",
+            lambda layer: setattr(
+                layer, "vertical_align", align_map.get(text, TextAlignment.TOP)
+            ),
+        )
 
     def on_max_width_enabled_changed(self, enabled: bool):
-        """宽度限制启用状态变化"""
-        if isinstance(self.current_layer, TextLayer):
-            if enabled:
-                self.current_layer.max_width = self.max_width_spinbox.value()
-            else:
-                self.current_layer.max_width = None
-
-            # 更新控件状态
-            self.max_width_spinbox.setEnabled(enabled)
-            self.truncate_suffix_edit.setEnabled(enabled)
-
-            self.update_layer()
+        self._apply_current_layer_change(
+            "切换宽度限制",
+            lambda layer: setattr(
+                layer,
+                "max_width",
+                self.max_width_spinbox.value() if enabled else None,
+            ),
+            merge_key="max_width",
+        )
 
     def on_max_width_changed(self, value: int):
-        """最大宽度变化"""
-        if (
-            isinstance(self.current_layer, TextLayer)
-            and self.current_layer.max_width is not None
-        ):
-            self.current_layer.max_width = value
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改最大宽度",
+            lambda layer: setattr(layer, "max_width", value),
+            merge_key="max_width",
+        )
 
     def on_truncate_suffix_changed(self, text: str):
-        """截断后缀变化"""
-        if isinstance(self.current_layer, TextLayer):
-            self.current_layer.truncate_suffix = text
-            self.update_layer()
+        self._apply_current_layer_change(
+            "修改截断后缀",
+            lambda layer: setattr(layer, "truncate_suffix", text),
+            merge_key="truncate_suffix",
+        )
 
     def browse_image(self):
-        """浏览图片文件"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择图片",
@@ -634,100 +697,85 @@ class PropertyPanel(QWidget):
             "图片文件 (*.png *.jpg *.jpeg *.bmp *.tiff);;所有文件 (*)",
         )
         if file_path:
-            self.image_path_edit.setText(file_path)
+            self._apply_current_layer_change(
+                "选择图片文件", lambda layer: setattr(layer, "image_path", file_path)
+            )
 
     def browse_font(self):
-        """浏览字体文件"""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "选择字体", "", "字体文件 (*.ttf *.otf);;所有文件 (*)"
         )
         if file_path:
-            self.font_path_edit.setText(file_path)
+            self._apply_current_layer_change(
+                "选择字体文件", lambda layer: setattr(layer, "font_path", file_path)
+            )
 
     def choose_color(self):
-        """选择颜色"""
-        if isinstance(self.current_layer, TextLayer):
-            current_color = QColor(*self.current_layer.color)
-            color = QColorDialog.getColor(current_color, self, "选择文字颜色")
-            if color.isValid():
-                self.current_layer.color = (
-                    color.red(),
-                    color.green(),
-                    color.blue(),
-                    color.alpha(),
-                )
-                self.update_color_button(color)
-                self.update_layer()
+        if not isinstance(self.current_layer, TextLayer):
+            return
+
+        current_color = QColor(*self.current_layer.color)
+        color = QColorDialog.getColor(current_color, self, "选择文字颜色")
+        if color.isValid():
+            self.update_color_button(color)
+            rgba = (color.red(), color.green(), color.blue(), color.alpha())
+            self._apply_current_layer_change(
+                "修改文字颜色", lambda layer: setattr(layer, "color", rgba)
+            )
 
     def update_color_button(self, color: QColor):
-        """更新颜色按钮显示"""
         self.color_btn.setStyleSheet(f"background-color: {color.name()};")
         self.color_label.setText(color.name())
 
-    def update_layer(self):
-        """更新图层"""
-        if self.current_layer:
-            self.project_model.update_layer(self.current_layer)
-
     def on_layer_updated(self, layer: BaseLayer):
-        """处理图层更新信号"""
-        # 如果更新的是当前选中的图层，则更新UI显示
         if self.current_layer and layer.id == self.current_layer.id:
-            # 防止循环更新：先断开信号连接
-            self.x_spinbox.blockSignals(True)
-            self.y_spinbox.blockSignals(True)
-
-            # 更新位置显示
-            self.x_spinbox.setValue(layer.position.x)
-            self.y_spinbox.setValue(layer.position.y)
-
-            # 恢复信号连接
-            self.x_spinbox.blockSignals(False)
-            self.y_spinbox.blockSignals(False)
-
-            # 如果是图片层，还需要更新尺寸显示
-            if isinstance(layer, ImageLayer):
-                # 防止循环更新：先断开信号连接
-                self.width_spinbox.blockSignals(True)
-                self.height_spinbox.blockSignals(True)
-
-                # 更新尺寸显示
-                self.width_spinbox.setValue(layer.size.width)
-                self.height_spinbox.setValue(layer.size.height)
-
-                # 恢复信号连接
-                self.width_spinbox.blockSignals(False)
-                self.height_spinbox.blockSignals(False)
-
-            # 更新当前图层引用
             self.current_layer = layer
+            self.update_ui()
+
+    def on_model_reset(self):
+        self.commit_all_history_groups()
+        if not self.current_layer:
+            self.hide_all_groups()
+            return
+        self.set_current_layer(self.current_layer.id)
+
+    def on_base_image_changed(self, _image_path: str):
+        if isinstance(self.current_layer, BaseImageLayer):
+            if self.project_model.base_image is None:
+                self.current_layer = None
+                self.hide_all_groups()
+            else:
+                self.current_layer = self.project_model.base_image
+                self.update_ui()
+
+    def on_base_image_path_changed(self, path: str):
+        self._apply_current_layer_change(
+            "修改底图路径",
+            lambda layer: setattr(layer, "image_path", path),
+            merge_key="base_image_path",
+        )
 
     def on_base_image_parameter_changed(self, is_parameter: bool):
-        """底图参数变化"""
-        if isinstance(self.current_layer, BaseImageLayer):
-            self.current_layer.is_path_parameter = is_parameter
-            self.update_base_image()
+        self._apply_current_layer_change(
+            "切换底图参数",
+            lambda layer: setattr(layer, "is_path_parameter", is_parameter),
+        )
 
     def on_base_image_param_name_changed(self, name: str):
-        """底图参数名变化"""
-        if isinstance(self.current_layer, BaseImageLayer):
-            self.current_layer.parameter_name = name
-            self.update_base_image()
+        self._apply_current_layer_change(
+            "修改底图参数名",
+            lambda layer: setattr(layer, "parameter_name", name),
+            merge_key="base_image_param_name",
+        )
 
     def browse_base_image(self):
-        """浏览底图文件"""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "选择底图",
             "",
             "图片文件 (*.png *.jpg *.jpeg *.bmp *.tiff);;所有文件 (*)",
         )
-        if file_path and isinstance(self.current_layer, BaseImageLayer):
-            self.current_layer.image_path = file_path
-            self.base_image_path_edit.setText(file_path)
-            self.update_base_image()
-
-    def update_base_image(self):
-        """更新底图"""
-        if isinstance(self.current_layer, BaseImageLayer):
-            self.project_model.replace_base_image(self.current_layer)
+        if file_path:
+            self._apply_current_layer_change(
+                "选择底图文件", lambda layer: setattr(layer, "image_path", file_path)
+            )
