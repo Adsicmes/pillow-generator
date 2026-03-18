@@ -2,6 +2,7 @@
 数据模型定义
 """
 
+import copy
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -206,6 +207,7 @@ class ProjectModel(QObject):
     layer_removed = Signal(str)  # layer_id
     layer_updated = Signal(BaseLayer)
     base_image_changed = Signal(str)  # image_path
+    layer_order_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -261,11 +263,26 @@ class ProjectModel(QObject):
         """添加图层"""
         self._layers.append(layer)
         self.layer_added.emit(layer)
+        self.layer_order_changed.emit()
 
     def remove_layer(self, layer_id: str):
         """移除图层"""
         self._layers = [l for l in self._layers if l.id != layer_id]
         self.layer_removed.emit(layer_id)
+        self.layer_order_changed.emit()
+
+    def duplicate_layer(self, layer_id: str) -> Optional[BaseLayer]:
+        layer = self.get_layer(layer_id)
+        if not layer:
+            return None
+
+        duplicated_layer = copy.deepcopy(layer)
+        duplicated_layer.id = str(uuid.uuid4())
+        duplicated_layer.name = f"{layer.name} 副本"
+        duplicated_layer.position.x += 20
+        duplicated_layer.position.y += 20
+        self.add_layer(duplicated_layer)
+        return duplicated_layer
 
     def get_layer(self, layer_id: str) -> Optional[BaseLayer]:
         """获取图层"""
@@ -293,6 +310,7 @@ class ProjectModel(QObject):
     def clear_layers(self):
         """清空所有图层"""
         self._layers.clear()
+        self.layer_order_changed.emit()
 
     def move_layer(self, layer_id: str, new_index: int):
         """移动图层位置（影响z-index）"""
@@ -308,6 +326,7 @@ class ProjectModel(QObject):
         if layer and 0 <= new_index < len(self._layers):
             self._layers.pop(old_index)
             self._layers.insert(new_index, layer)
+            self.layer_order_changed.emit()
 
     def to_dict(self) -> Dict[str, Any]:
         """导出为字典"""

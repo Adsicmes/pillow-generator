@@ -336,12 +336,19 @@ class CanvasView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFrameStyle(QFrame.Shape.NoFrame)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setToolTip(
+            "编辑画布用于布局调整；按空格+左键拖动画布，预览窗口显示最终 Pillow 渲染结果。"
+        )
 
         # 图形项缓存
         self.graphics_items: Dict[str, Any] = {}
 
         # 背景图形项
         self.base_image_item: Optional[QGraphicsPixmapItem] = None
+
+        self._space_pressed = False
+        self._panning = False
 
         # 连接信号
         self.connect_signals()
@@ -386,6 +393,7 @@ class CanvasView(QGraphicsView):
         self.project_model.layer_added.connect(self.add_layer_item)
         self.project_model.layer_removed.connect(self.remove_layer_item)
         self.project_model.layer_updated.connect(self.update_layer_item)
+        self.project_model.layer_order_changed.connect(self.refresh_layer_z_values)
 
         # 场景选择变化
         self.graphics_scene.selectionChanged.connect(self.on_selection_changed)
@@ -420,11 +428,17 @@ class CanvasView(QGraphicsView):
             item = ImageGraphicsItem(layer, self.project_model)
             self.graphics_scene.addItem(item)
             self.graphics_items[layer.id] = item
+            if self._space_pressed:
+                item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
         elif layer.layer_type == LayerType.TEXT and isinstance(layer, TextLayer):
             item = TextGraphicsItem(layer, self.project_model)
             self.graphics_scene.addItem(item)
             self.graphics_items[layer.id] = item
+            if self._space_pressed:
+                item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+
+        self.refresh_layer_z_values()
 
     def remove_layer_item(self, layer_id: str):
         """移除图层图形项"""
@@ -432,6 +446,7 @@ class CanvasView(QGraphicsView):
             item = self.graphics_items[layer_id]
             self.graphics_scene.removeItem(item)
             del self.graphics_items[layer_id]
+        self.refresh_layer_z_values()
 
     def update_layer_item(self, layer: BaseLayer):
         """更新图层图形项"""
@@ -446,6 +461,12 @@ class CanvasView(QGraphicsView):
                 item.text_layer = layer
                 item.update_text()
 
+    def refresh_layer_z_values(self):
+        for index, layer in enumerate(self.project_model.get_all_layers(), start=1):
+            item = self.graphics_items.get(layer.id)
+            if item is not None:
+                item.setZValue(index)
+
     def on_selection_changed(self):
         """处理选择变化"""
         selected_items = self.graphics_scene.selectedItems()
@@ -455,13 +476,13 @@ class CanvasView(QGraphicsView):
                 self.layer_selected.emit(item.layer.id)
             elif isinstance(item, TextGraphicsItem) and hasattr(item, "text_layer"):
                 self.layer_selected.emit(item.text_layer.id)
+        else:
+            self.layer_selected.emit("")
 
     def select_layer(self, layer_id: str):
         """选择指定图层"""
+        self.graphics_scene.clearSelection()
         if layer_id in self.graphics_items:
-            # 清除当前选择
-            self.graphics_scene.clearSelection()
-            # 选择指定项
             item = self.graphics_items[layer_id]
             item.setSelected(True)
 
@@ -485,15 +506,52 @@ class CanvasView(QGraphicsView):
         factor = 1.2 if event.angleDelta().y() > 0 else 1.0 / 1.2
         self.scale(factor, factor)
 
+    def _set_pan_mode(self, enabled: bool):
+        self.setDragMode(
+            QGraphicsView.DragMode.ScrollHandDrag
+            if enabled
+            else QGraphicsView.DragMode.NoDrag
+        )
+        accepted_buttons = (
+            Qt.MouseButton.NoButton if enabled else Qt.MouseButton.LeftButton
+        )
+        for item in self.graphics_items.values():
+            item.setAcceptedMouseButtons(accepted_buttons)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pressed = True
+            self._set_pan_mode(True)
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pressed = False
+            if not self._panning:
+                self._set_pan_mode(False)
+                self.viewport().unsetCursor()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
     def mousePressEvent(self, event):
         """鼠标按下事件"""
-        if event.button() == Qt.MouseButton.MiddleButton:
-            # 中键拖拽
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setFocus()
+        if self._space_pressed and event.button() == Qt.MouseButton.LeftButton:
+            self._panning = True
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        if self._panning and event.button() == Qt.MouseButton.LeftButton:
+            self._panning = False
+            if self._space_pressed:
+                self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            else:
+                self._set_pan_mode(False)
+                self.viewport().unsetCursor()
         super().mouseReleaseEvent(event)
