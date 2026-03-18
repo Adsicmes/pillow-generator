@@ -160,6 +160,8 @@ class MainWindow(QMainWindow):
         self.code_generator = CodeGenerator(self.project_model, self)
         self.canvas_view = CanvasView(self.project_model, self)
         self.recent_projects_menu = QMenu("最近项目", self)
+        self.undo_action = QAction("撤销(&U)", self)
+        self.redo_action = QAction("重做(&R)", self)
 
         # 设置窗口属性
         self.setWindowTitle("Pillow 代码生成器")
@@ -174,6 +176,7 @@ class MainWindow(QMainWindow):
         # 连接信号槽
         self.connect_signals()
         self.project_manager.reset_tracking(self.project_model)
+        self.project_model.reset_history()
         self.update_window_title()
 
     def init_ui(self):
@@ -253,6 +256,18 @@ class MainWindow(QMainWindow):
         # 编辑菜单
         edit_menu = menubar.addMenu("编辑(&E)")
 
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setEnabled(False)
+        self.undo_action.triggered.connect(self.undo)
+        edit_menu.addAction(self.undo_action)
+
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.setEnabled(False)
+        self.redo_action.triggered.connect(self.redo)
+        edit_menu.addAction(self.redo_action)
+
+        edit_menu.addSeparator()
+
         # 添加图片层
         add_image_action = QAction("添加图片层(&I)", self)
         add_image_action.setStatusTip("添加一个新的图片层")
@@ -317,6 +332,24 @@ class MainWindow(QMainWindow):
         save_action.setStatusTip("保存项目")
         save_action.triggered.connect(self.save_project)
         toolbar.addAction(save_action)
+
+        toolbar.addSeparator()
+
+        undo_toolbar_action = QAction("撤销", self)
+        undo_toolbar_action.triggered.connect(self.undo)
+        undo_toolbar_action.setEnabled(False)
+        self.undo_action.changed.connect(
+            lambda: undo_toolbar_action.setEnabled(self.undo_action.isEnabled())
+        )
+        toolbar.addAction(undo_toolbar_action)
+
+        redo_toolbar_action = QAction("重做", self)
+        redo_toolbar_action.triggered.connect(self.redo)
+        redo_toolbar_action.setEnabled(False)
+        self.redo_action.changed.connect(
+            lambda: redo_toolbar_action.setEnabled(self.redo_action.isEnabled())
+        )
+        toolbar.addAction(redo_toolbar_action)
 
         toolbar.addSeparator()
 
@@ -388,6 +421,12 @@ class MainWindow(QMainWindow):
         self.project_model.base_image_changed.connect(
             self.code_generator.refresh_parameters
         )
+        self.project_model.model_reset.connect(self.code_generator.refresh_parameters)
+        self.project_model.history_changed.connect(self.update_history_actions)
+
+    def update_history_actions(self, can_undo: bool, can_redo: bool):
+        self.undo_action.setEnabled(can_undo)
+        self.redo_action.setEnabled(can_redo)
 
     def update_window_title(self):
         current_file = self.project_manager.current_file
@@ -444,6 +483,7 @@ class MainWindow(QMainWindow):
         self.project_model.project_name = "未命名项目"
         self.project_model.function_name = "generate_image"
         self.project_manager.reset_tracking(self.project_model, None)
+        self.project_model.reset_history()
 
         # 更新代码生成器UI
         self.code_generator.update_from_project()
@@ -479,6 +519,7 @@ class MainWindow(QMainWindow):
                 project_name = os.path.splitext(os.path.basename(file_path))[0]
                 self.project_model.project_name = project_name
                 self.project_manager.reset_tracking(self.project_model, file_path)
+                self.project_model.reset_history()
 
                 # 更新代码生成器UI
                 self.code_generator.update_from_project()
@@ -553,11 +594,14 @@ class MainWindow(QMainWindow):
 
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 settings = dialog.get_parameter_settings()
-                self.project_model.set_base_image(
-                    file_path,
-                    f"底图 - {os.path.basename(file_path)}",
-                    settings["is_parameter"],
-                    settings["parameter_name"],
+                self.project_model.apply_operation(
+                    "设置底图",
+                    lambda: self.project_model.set_base_image(
+                        file_path,
+                        f"底图 - {os.path.basename(file_path)}",
+                        settings["is_parameter"],
+                        settings["parameter_name"],
+                    ),
                 )
 
                 param_text = (
@@ -586,7 +630,9 @@ class MainWindow(QMainWindow):
                 image_path=file_path,
                 size=Size(200, 200),
             )
-            self.project_model.add_layer(layer)
+            self.project_model.apply_operation(
+                "添加图片层", lambda: self.project_model.add_layer(layer)
+            )
             self.status_bar.showMessage(f"已添加图片层: {os.path.basename(file_path)}")
 
     def add_text_layer(self):
@@ -594,13 +640,22 @@ class MainWindow(QMainWindow):
         from ..core.models import TextLayer
 
         layer = TextLayer(name="文字层", text="示例文字")
-        self.project_model.add_layer(layer)
+        self.project_model.apply_operation(
+            "添加文字层", lambda: self.project_model.add_layer(layer)
+        )
         self.status_bar.showMessage("已添加文字层")
+
+    def undo(self):
+        if self.project_model.undo():
+            self.status_bar.showMessage("已撤销上一步操作", 3000)
+
+    def redo(self):
+        if self.project_model.redo():
+            self.status_bar.showMessage("已重做上一步操作", 3000)
 
     def generate_code(self):
         """生成代码"""
         self.code_generator.generate_code()
-        self.status_bar.showMessage("代码生成完成")
 
     def preview_result(self):
         """预览结果"""

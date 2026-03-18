@@ -33,9 +33,29 @@ class LayerGraphicsItem(QGraphicsPixmapItem):
         super().__init__(parent)
         self.layer = layer
         self.project_model = project_model
+        self._drag_start_snapshot: Dict[str, Any] | None = None
         self.setFlag(self.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(self.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.update_interaction_state()
+
+    def update_interaction_state(self):
+        self.setFlag(self.GraphicsItemFlag.ItemIsMovable, not self.layer.locked)
+
+    def mousePressEvent(self, event):
+        if self.layer.locked:
+            event.ignore()
+            return
+        self._drag_start_snapshot = self.project_model.capture_snapshot()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self._drag_start_snapshot is not None:
+            self.project_model.record_manual_change(
+                self._drag_start_snapshot, "移动图片层"
+            )
+            self._drag_start_snapshot = None
 
     def itemChange(self, change, value):
         """处理项目变化"""
@@ -91,6 +111,7 @@ class ImageGraphicsItem(LayerGraphicsItem):
 
         # 设置旋转
         self.setRotation(self.image_layer.rotation)
+        self.update_interaction_state()
 
 
 class TextGraphicsItem(QGraphicsTextItem):
@@ -103,6 +124,7 @@ class TextGraphicsItem(QGraphicsTextItem):
         super().__init__(parent)
         self.text_layer = layer
         self.project_model = project_model
+        self._drag_start_snapshot: Dict[str, Any] | None = None
 
         # 防止无限循环的标志
         self._updating_position = False
@@ -112,6 +134,9 @@ class TextGraphicsItem(QGraphicsTextItem):
         self.setFlag(self.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(self.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self.update_text()
+
+    def update_interaction_state(self):
+        self.setFlag(self.GraphicsItemFlag.ItemIsMovable, not self.text_layer.locked)
 
     def update_text(self):
         """更新显示的文字"""
@@ -125,6 +150,7 @@ class TextGraphicsItem(QGraphicsTextItem):
             from PySide6.QtCore import QTimer
 
             QTimer.singleShot(10, self._apply_vertical_alignment)
+        self.update_interaction_state()
 
     def _apply_vertical_alignment(self):
         """应用对齐（延迟执行以确保HTML布局完成）"""
@@ -248,12 +274,21 @@ class TextGraphicsItem(QGraphicsTextItem):
 
     def mousePressEvent(self, event):
         """鼠标按下事件"""
+        if self.text_layer.locked:
+            event.ignore()
+            return
+        self._drag_start_snapshot = self.project_model.capture_snapshot()
         self._dragging = True
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
         super().mouseReleaseEvent(event)
+        if self._drag_start_snapshot is not None:
+            self.project_model.record_manual_change(
+                self._drag_start_snapshot, "移动文字层"
+            )
+            self._drag_start_snapshot = None
         # 延迟重置拖动状态，确保位置更新完成
         from PySide6.QtCore import QTimer
 
@@ -394,6 +429,7 @@ class CanvasView(QGraphicsView):
         self.project_model.layer_removed.connect(self.remove_layer_item)
         self.project_model.layer_updated.connect(self.update_layer_item)
         self.project_model.layer_order_changed.connect(self.refresh_layer_z_values)
+        self.project_model.model_reset.connect(self.refresh_from_model)
 
         # 场景选择变化
         self.graphics_scene.selectionChanged.connect(self.on_selection_changed)
@@ -456,10 +492,12 @@ class CanvasView(QGraphicsView):
             if isinstance(item, ImageGraphicsItem) and isinstance(layer, ImageLayer):
                 item.image_layer = layer
                 item.update_pixmap()
+                item.update_interaction_state()
 
             elif isinstance(item, TextGraphicsItem) and isinstance(layer, TextLayer):
                 item.text_layer = layer
                 item.update_text()
+                item.update_interaction_state()
 
     def refresh_layer_z_values(self):
         for index, layer in enumerate(self.project_model.get_all_layers(), start=1):
@@ -485,6 +523,18 @@ class CanvasView(QGraphicsView):
         if layer_id in self.graphics_items:
             item = self.graphics_items[layer_id]
             item.setSelected(True)
+
+    def refresh_from_model(self):
+        self.graphics_scene.clear()
+        self.graphics_items.clear()
+        self.base_image_item = None
+        self.init_scene()
+
+        if self.project_model.base_image:
+            self.update_base_image(self.project_model.base_image.image_path)
+
+        for layer in self.project_model.get_all_layers():
+            self.add_layer_item(layer)
 
     def reset_view(self):
         """重置视图"""
@@ -544,6 +594,9 @@ class CanvasView(QGraphicsView):
             self._panning = True
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        super().mouseDoubleClickEvent(event)
 
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
