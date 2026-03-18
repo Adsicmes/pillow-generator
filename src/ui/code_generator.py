@@ -217,12 +217,22 @@ class CodeGenerator(QWidget):
 
     def generate_code(self):
         """生成Pillow代码"""
-        if not self.project_model.base_image:
-            QMessageBox.warning(self, "警告", "请先设置底图!")
-            return
-
         code = self.build_code()
         self.code_text.setPlainText(code)
+
+        parent = self.parent()
+        while parent:
+            status_bar = getattr(parent, "status_bar", None)
+            if status_bar and hasattr(status_bar, "showMessage"):
+                if self.project_model.base_image:
+                    status_bar.showMessage("代码生成完成", 3000)
+                else:
+                    status_bar.showMessage(
+                        "代码生成完成：当前未设置底图，已生成空白画布版本",
+                        4000,
+                    )
+                break
+            parent = parent.parent()
 
     def _get_project_file_path(self) -> str | None:
         parent = self.parent()
