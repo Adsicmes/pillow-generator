@@ -1,4 +1,5 @@
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -220,6 +221,36 @@ def test_switching_selected_layer_flushes_pending_history_group():
 
     assert project.undo() is True
     reverted_layer = project.get_layer(first_layer.id)
+    assert reverted_layer is not None
+    assert isinstance(reverted_layer, TextLayer)
+    assert reverted_layer.text == "A"
+
+
+def test_timer_commits_pending_history_group():
+    app = get_qapplication()
+
+    project = ProjectModel()
+    property_panel = PropertyPanel(project)
+    layer = TextLayer(name="标题", text="A")
+    project.add_layer(layer)
+
+    property_panel.set_current_layer(layer.id)
+    property_panel.text_edit.setText("AB")
+
+    timeout_result = []
+    property_panel.begin_history_group("timer_probe", "定时提交探针")
+    property_panel.commit_history_group("timer_probe")
+
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(450, lambda: timeout_result.append(project.can_undo))
+    deadline = time.time() + 1.0
+    while not timeout_result and time.time() < deadline:
+        app.processEvents()
+
+    assert timeout_result == [True]
+    assert project.undo() is True
+    reverted_layer = project.get_layer(layer.id)
     assert reverted_layer is not None
     assert isinstance(reverted_layer, TextLayer)
     assert reverted_layer.text == "A"

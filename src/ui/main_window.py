@@ -471,8 +471,12 @@ class MainWindow(QMainWindow):
         self.update_recent_projects_menu()
 
     # 槽函数实现
+    def flush_pending_history(self):
+        self.project_model.pending_history_commit_requested.emit()
+
     def new_project(self):
         """新建项目"""
+        self.flush_pending_history()
         # 检查是否有未保存的更改
         if self.check_unsaved_changes():
             return
@@ -493,6 +497,7 @@ class MainWindow(QMainWindow):
 
     def open_project(self, target_file_path: str | None = None):
         """打开项目"""
+        self.flush_pending_history()
         if self.check_unsaved_changes():
             return
 
@@ -533,6 +538,7 @@ class MainWindow(QMainWindow):
 
     def save_project(self) -> bool:
         """保存项目"""
+        self.flush_pending_history()
         if self.project_manager.current_file:
             if self.project_manager.save_project(
                 self.project_model, self.project_manager.current_file
@@ -550,6 +556,7 @@ class MainWindow(QMainWindow):
 
     def save_project_as(self) -> bool:
         """另存为"""
+        self.flush_pending_history()
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "另存为",
@@ -720,6 +727,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        self.flush_pending_history()
         if self.check_unsaved_changes():
             event.ignore()
             return
